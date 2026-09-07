@@ -24,7 +24,7 @@ const CHANNELS = ["WhatsApp","Instagram","Balcão","Telefone","iFood","Outro"];
 const state = {
   session: null,
   profile: null,
-  roleIntent: "vendas",
+  roleIntent: null,
   view: "sales",
   sales: [],
   month: new Date().toISOString().slice(0,7),
@@ -78,19 +78,37 @@ async function loadProfile() {
 }
 
 async function login(email, password) {
+  if (!state.roleIntent) {
+    throw new Error("Escolha primeiro o tipo de acesso.");
+  }
+
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error) throw error;
+  if (error) throw new Error("E-mail ou senha inválidos.");
+
   state.session = data.session;
   await loadProfile();
 
-  if (state.roleIntent === "gestao" && state.profile.role !== "gestao") {
+  // Os acessos são independentes: uma credencial de Vendas não entra na Gestão
+  // e uma credencial de Gestão não entra pelo acesso de Vendas.
+  if (state.profile.role !== state.roleIntent) {
+    const attemptedRole = state.roleIntent;
+
     await supabase.auth.signOut();
     state.session = null;
     state.profile = null;
-    throw new Error("Este usuário não possui acesso de Gestão.");
+
+    if (attemptedRole === "gestao") {
+      throw new Error(
+        "Este e-mail não é um acesso de Gestão. Use o e-mail e a senha exclusivos da Gestão."
+      );
+    }
+
+    throw new Error(
+      "Este e-mail pertence à Gestão. Para entrar, escolha o Acesso Gestão."
+    );
   }
 
-  state.view = "sales";
+  state.view = state.profile.role === "gestao" ? "control" : "sales";
   await loadSales();
   connectRealtime();
   render();
@@ -102,6 +120,7 @@ async function logout() {
   state.session = null;
   state.profile = null;
   state.sales = [];
+  state.roleIntent = null;
   render();
 }
 
@@ -201,6 +220,16 @@ function getRowData(tr) {
 
 function renderAuth() {
   const app = document.querySelector("#app");
+
+  const selected = state.roleIntent;
+  const isGestao = selected === "gestao";
+  const accessTitle = isGestao ? "Acesso Gestão" : "Acesso Vendas";
+  const accessDescription = isGestao
+    ? "Área restrita à gestão. Use o e-mail e a senha exclusivos da Gestão."
+    : "Área da equipe de vendas. Use o e-mail e a senha cadastrados para Vendas.";
+  const emailLabel = isGestao ? "E-mail da Gestão" : "E-mail de Vendas";
+  const buttonLabel = isGestao ? "Entrar na Gestão" : "Entrar em Vendas";
+
   app.innerHTML = `
     <section class="auth-page">
       <div class="auth-brand">
@@ -215,47 +244,117 @@ function renderAuth() {
       </div>
 
       <div class="auth-panel">
-        <h2>Escolha seu acesso</h2>
-        <p>Vendas registra. Gestão acompanha e controla. Tudo conectado em tempo real.</p>
+        ${
+          !selected
+            ? `
+              <div class="access-intro">
+                <span class="eyebrow">SISTEMA DE VENDAS</span>
+                <h2>Escolha seu acesso</h2>
+                <p>Vendas e Gestão possuem credenciais diferentes, mas trabalham sobre a mesma base de dados.</p>
+              </div>
 
-        <div class="access-grid">
-          <button class="access-card ${state.roleIntent==="vendas"?"active":""}" data-role="vendas">
-            <strong>Acesso Vendas</strong>
-            <span>Registro diário dos pedidos.</span>
-          </button>
-          <button class="access-card ${state.roleIntent==="gestao"?"active":""}" data-role="gestao">
-            <strong>Acesso Gestão</strong>
-            <span>Registro + Controle de vendas.</span>
-          </button>
-        </div>
+              <div class="access-grid access-grid-entry">
+                <button class="access-card access-card-large" data-role="vendas">
+                  <span class="access-icon">◫</span>
+                  <strong>Acesso Vendas</strong>
+                  <span>Registro diário dos pedidos.</span>
+                  <small>Somente Registro de Vendas</small>
+                </button>
 
-        <form id="loginForm" class="form-stack">
-          <div class="field"><label>E-mail</label><input name="email" type="email" required></div>
-          <div class="field"><label>Senha</label><input name="password" type="password" required></div>
-          <div id="authError" class="error-box hidden"></div>
-          <button class="btn-primary" type="submit">Entrar</button>
-        </form>
+                <button class="access-card access-card-large management-card" data-role="gestao">
+                  <span class="access-icon">▥</span>
+                  <strong>Acesso Gestão</strong>
+                  <span>Registro + Controle de vendas.</span>
+                  <small>Área restrita à Gestão</small>
+                </button>
+              </div>
+
+              <div class="info-box access-info">
+                Os dois acessos são independentes e permanecem conectados ao mesmo banco de vendas.
+              </div>
+            `
+            : `
+              <button id="backAccess" class="back-access" type="button">← Trocar tipo de acesso</button>
+
+              <div class="selected-access ${isGestao ? "selected-management" : "selected-sales"}">
+                <span class="eyebrow">${isGestao ? "ÁREA RESTRITA" : "REGISTRO DE PEDIDOS"}</span>
+                <h2>${accessTitle}</h2>
+                <p>${accessDescription}</p>
+              </div>
+
+              <form id="loginForm" class="form-stack">
+                <div class="field">
+                  <label>${emailLabel}</label>
+                  <input
+                    name="email"
+                    type="email"
+                    autocomplete="username"
+                    placeholder="${isGestao ? "gestao@..." : "vendas@..."}"
+                    required
+                  >
+                </div>
+
+                <div class="field">
+                  <label>Senha</label>
+                  <input
+                    name="password"
+                    type="password"
+                    autocomplete="current-password"
+                    required
+                  >
+                </div>
+
+                <div id="authError" class="error-box hidden"></div>
+
+                <button class="btn-primary access-submit" type="submit">
+                  ${buttonLabel}
+                </button>
+              </form>
+
+              <div class="access-security-note">
+                <strong>${isGestao ? "Gestão" : "Vendas"}</strong>
+                <span>
+                  ${
+                    isGestao
+                      ? "Este acesso abre o Registro de Vendas e o Controle."
+                      : "Este acesso abre somente o Registro de Vendas."
+                  }
+                </span>
+              </div>
+            `
+        }
       </div>
     </section>
   `;
 
-  app.querySelectorAll("[data-role]").forEach(b => b.onclick = () => {
-    state.roleIntent = b.dataset.role;
+  app.querySelectorAll("[data-role]").forEach((button) => {
+    button.onclick = () => {
+      state.roleIntent = button.dataset.role;
+      renderAuth();
+    };
+  });
+
+  app.querySelector("#backAccess")?.addEventListener("click", () => {
+    state.roleIntent = null;
     renderAuth();
   });
 
-  app.querySelector("#loginForm").onsubmit = async e => {
-    e.preventDefault();
-    const f = new FormData(e.target);
-    const box = app.querySelector("#authError");
-    box.classList.add("hidden");
-    try {
-      await login(f.get("email"), f.get("password"));
-    } catch (err) {
-      box.textContent = err.message;
-      box.classList.remove("hidden");
-    }
-  };
+  const form = app.querySelector("#loginForm");
+  if (form) {
+    form.onsubmit = async (event) => {
+      event.preventDefault();
+      const data = new FormData(event.target);
+      const box = app.querySelector("#authError");
+      box.classList.add("hidden");
+
+      try {
+        await login(data.get("email"), data.get("password"));
+      } catch (err) {
+        box.textContent = err.message;
+        box.classList.remove("hidden");
+      }
+    };
+  }
 }
 
 function sidebarHTML() {
@@ -264,7 +363,7 @@ function sidebarHTML() {
     <aside class="sidebar">
       <div class="side-brand">
         <img src="./public/logo-bolo-com-cafe.jpeg" alt="">
-        <div><strong>Bolo com Café</strong><small>Sistema de Gestão</small></div>
+        <div><strong>Bolo com Café</strong><small>${canControl ? "Gestão" : "Vendas"}</small></div>
       </div>
       <nav class="nav">
         <button data-view="sales" class="${state.view==="sales"?"active":""}">▣ Registro de Vendas</button>
