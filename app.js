@@ -6,7 +6,7 @@ const SUPABASE_ANON_KEY = "sb_publishable_e1DZJ7G8FXwfdNVp6rlEnA_Hdf_dF0b";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const CAKE_FLAVORS = [
-  "Baeta","Banana","Banana com doce de leite","Branco","Brownie Maluco","Cenoura",
+  "Baeta","Banana","Banana com doce de leite","Branco","Brigadeiro","Brownie Maluco","Cenoura",
   "Cenoura Supreme","Chocolate","Chocolatudo","Choconinho","Churros","Cocada",
   "Formigueiro","Frutas Vermelhas","Laranja","Limão Siciliano",
   "Limão siciliano com amora","Macaxeira Caramelizada","Milho Cremoso","Ninho",
@@ -24,10 +24,20 @@ const CHANNELS = ["WhatsApp","Instagram","Balcão","Telefone","iFood","Outro"];
 const state = {
   session: null,
   profile: null,
-  roleIntent: "vendas",
+  roleIntent: null,
   view: "sales",
+
+  // Registro diário
   sales: [],
   month: new Date().toISOString().slice(0,7),
+
+  // Controle gerencial
+  controlSales: [],
+  historicalSales: [],
+  historyMeta: null,
+  controlPeriodType: "month",
+  controlReferenceDate: new Date().toISOString().slice(0,10),
+
   realtime: null
 };
 
@@ -57,11 +67,18 @@ function options(items, selected = "") {
 async function bootstrap() {
   const { data } = await supabase.auth.getSession();
   state.session = data.session;
+
   if (state.session) {
     await loadProfile();
     await loadSales();
+
+    if (state.profile?.role === "gestao") {
+      await loadControlData();
+    }
+
     connectRealtime();
   }
+
   render();
 }
 
@@ -78,20 +95,42 @@ async function loadProfile() {
 }
 
 async function login(email, password) {
+  if (!state.roleIntent) {
+    throw new Error("Escolha primeiro o tipo de acesso.");
+  }
+
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error) throw error;
+  if (error) throw new Error("E-mail ou senha inválidos.");
+
   state.session = data.session;
   await loadProfile();
 
-  if (state.roleIntent === "gestao" && state.profile.role !== "gestao") {
+  if (state.profile.role !== state.roleIntent) {
+    const attemptedRole = state.roleIntent;
+
     await supabase.auth.signOut();
     state.session = null;
     state.profile = null;
-    throw new Error("Este usuário não possui acesso de Gestão.");
+
+    if (attemptedRole === "gestao") {
+      throw new Error(
+        "Este e-mail não é um acesso de Gestão. Use o e-mail e a senha exclusivos da Gestão."
+      );
+    }
+
+    throw new Error(
+      "Este e-mail pertence à Gestão. Para entrar, escolha o Acesso Gestão."
+    );
   }
 
-  state.view = "sales";
+  state.view = state.profile.role === "gestao" ? "control" : "sales";
+
   await loadSales();
+
+  if (state.profile.role === "gestao") {
+    await loadControlData();
+  }
+
   connectRealtime();
   render();
 }
@@ -99,23 +138,31 @@ async function login(email, password) {
 async function logout() {
   if (state.realtime) await supabase.removeChannel(state.realtime);
   await supabase.auth.signOut();
+
   state.session = null;
   state.profile = null;
   state.sales = [];
+  state.controlSales = [];
+  state.historicalSales = [];
+  state.historyMeta = null;
+  state.roleIntent = null;
+
   render();
 }
 
 async function loadSales() {
   if (!state.session) return;
+
   const start = `${state.month}-01`;
-  const [y,m] = state.month.split("-").map(Number);
-  const next = new Date(y, m, 1).toISOString().slice(0,10);
+  const [year, month] = state.month.split("-").map(Number);
+  const next = new Date(year, month, 1);
+  const nextMonth = toYMD(next);
 
   const { data, error } = await supabase
     .from("sales")
     .select("*")
     .gte("sale_date", start)
-    .lt("sale_date", next)
+    .lt("sale_date", nextMonth)
     .order("sale_date", { ascending: false })
     .order("created_at", { ascending: false });
 
@@ -123,13 +170,131 @@ async function loadSales() {
   state.sales = data || [];
 }
 
+function toYMD(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function lastDayOfMonth(year, monthIndex) {
+  return new Date(year, monthIndex + 1, 0);
+}
+
+function getPeriodRange(type = state.controlPeriodType, referenceDate = state.controlReferenceDate) {
+  const ref = new Date(`${referenceDate}T12:00:00`);
+  const y = ref.getFullYear();
+  const m = ref.getMonth();
+
+  let start;
+  let end;
+  let label;
+
+  if (type === "week") {
+    const day = ref.getDay();
+    const distanceToMonday = day === 0 ? -6 : 1 - day;
+
+    start = new Date(ref);
+    start.setDate(ref.getDate() + distanceToMonday);
+
+    end = new Date(start);
+    end.setDate(start.getDate() + 6);
+
+    label = `Semana de ${dateBR(toYMD(start))} a ${dateBR(toYMD(end))}`;
+  } else if (type === "fortnight1") {
+    start = new Date(y, m, 1);
+    end = new Date(y, m, 15);
+    label = `1ª quinzena de ${monthLabel(referenceDate.slice(0,7))}`;
+  } else if (type === "fortnight2") {
+    start = new Date(y, m, 16);
+    end = lastDayOfMonth(y, m);
+    label = `2ª quinzena de ${monthLabel(referenceDate.slice(0,7))}`;
+  } else {
+    start = new Date(y, m, 1);
+    end = lastDayOfMonth(y, m);
+    label = monthLabel(referenceDate.slice(0,7));
+  }
+
+  return {
+    start: toYMD(start),
+    end: toYMD(end),
+    label,
+    monthKey: `${y}-${String(m + 1).padStart(2, "0")}`,
+    referenceMonth: `${y}-${String(m + 1).padStart(2, "0")}-01`
+  };
+}
+
+function monthLabel(monthKey) {
+  if (!monthKey) return "";
+  const [year, month] = monthKey.split("-").map(Number);
+  return new Intl.DateTimeFormat("pt-BR", {
+    month: "long",
+    year: "numeric"
+  }).format(new Date(year, month - 1, 1));
+}
+
+async function loadControlData() {
+  if (!state.session || state.profile?.role !== "gestao") return;
+
+  const period = getPeriodRange();
+
+  const { data: salesData, error: salesError } = await supabase
+    .from("sales")
+    .select("*")
+    .gte("sale_date", period.start)
+    .lte("sale_date", period.end)
+    .order("sale_date", { ascending: false })
+    .order("created_at", { ascending: false });
+
+  if (salesError) throw salesError;
+  state.controlSales = salesData || [];
+
+  if (state.controlPeriodType === "month") {
+    const { data: historicalData, error: historicalError } = await supabase
+      .from("historical_sales")
+      .select("*")
+      .eq("reference_month", period.referenceMonth)
+      .order("quantity", { ascending: false });
+
+    if (historicalError) throw historicalError;
+    state.historicalSales = historicalData || [];
+
+    const { data: metaData, error: metaError } = await supabase
+      .from("historical_months")
+      .select("*")
+      .eq("reference_month", period.referenceMonth)
+      .maybeSingle();
+
+    if (metaError) throw metaError;
+    state.historyMeta = metaData || null;
+  } else {
+    state.historicalSales = [];
+    state.historyMeta = null;
+  }
+}
+
+async function refreshCurrentData() {
+  if (state.view === "control" && state.profile?.role === "gestao") {
+    await loadControlData();
+  } else {
+    await loadSales();
+  }
+}
+
 function connectRealtime() {
   if (state.realtime) supabase.removeChannel(state.realtime);
+
   state.realtime = supabase
-    .channel("sales-live")
+    .channel("bolo-com-cafe-live")
     .on("postgres_changes", { event:"*", schema:"public", table:"sales" }, async () => {
-      await loadSales();
+      await refreshCurrentData();
       renderMainOnly();
+    })
+    .on("postgres_changes", { event:"*", schema:"public", table:"historical_sales" }, async () => {
+      if (state.view === "control" && state.profile?.role === "gestao") {
+        await loadControlData();
+        renderMainOnly();
+      }
     })
     .subscribe();
 }
@@ -201,6 +366,16 @@ function getRowData(tr) {
 
 function renderAuth() {
   const app = document.querySelector("#app");
+
+  const selected = state.roleIntent;
+  const isGestao = selected === "gestao";
+  const accessTitle = isGestao ? "Acesso Gestão" : "Acesso Vendas";
+  const accessDescription = isGestao
+    ? "Área restrita à gestão. Use o e-mail e a senha exclusivos da Gestão."
+    : "Área da equipe de vendas. Use o e-mail e a senha cadastrados para Vendas.";
+  const emailLabel = isGestao ? "E-mail da Gestão" : "E-mail de Vendas";
+  const buttonLabel = isGestao ? "Entrar na Gestão" : "Entrar em Vendas";
+
   app.innerHTML = `
     <section class="auth-page">
       <div class="auth-brand">
@@ -215,47 +390,117 @@ function renderAuth() {
       </div>
 
       <div class="auth-panel">
-        <h2>Escolha seu acesso</h2>
-        <p>Vendas registra. Gestão acompanha e controla. Tudo conectado em tempo real.</p>
+        ${
+          !selected
+            ? `
+              <div class="access-intro">
+                <span class="eyebrow">SISTEMA DE VENDAS</span>
+                <h2>Escolha seu acesso</h2>
+                <p>Vendas e Gestão possuem credenciais diferentes, mas trabalham sobre a mesma base de dados.</p>
+              </div>
 
-        <div class="access-grid">
-          <button class="access-card ${state.roleIntent==="vendas"?"active":""}" data-role="vendas">
-            <strong>Acesso Vendas</strong>
-            <span>Registro diário dos pedidos.</span>
-          </button>
-          <button class="access-card ${state.roleIntent==="gestao"?"active":""}" data-role="gestao">
-            <strong>Acesso Gestão</strong>
-            <span>Registro + Controle de vendas.</span>
-          </button>
-        </div>
+              <div class="access-grid access-grid-entry">
+                <button class="access-card access-card-large" data-role="vendas">
+                  <span class="access-icon">◫</span>
+                  <strong>Acesso Vendas</strong>
+                  <span>Registro diário dos pedidos.</span>
+                  <small>Somente Registro de Vendas</small>
+                </button>
 
-        <form id="loginForm" class="form-stack">
-          <div class="field"><label>E-mail</label><input name="email" type="email" required></div>
-          <div class="field"><label>Senha</label><input name="password" type="password" required></div>
-          <div id="authError" class="error-box hidden"></div>
-          <button class="btn-primary" type="submit">Entrar</button>
-        </form>
+                <button class="access-card access-card-large management-card" data-role="gestao">
+                  <span class="access-icon">▥</span>
+                  <strong>Acesso Gestão</strong>
+                  <span>Registro + Controle de vendas.</span>
+                  <small>Área restrita à Gestão</small>
+                </button>
+              </div>
+
+              <div class="info-box access-info">
+                Os dois acessos são independentes e permanecem conectados ao mesmo banco de vendas.
+              </div>
+            `
+            : `
+              <button id="backAccess" class="back-access" type="button">← Trocar tipo de acesso</button>
+
+              <div class="selected-access ${isGestao ? "selected-management" : "selected-sales"}">
+                <span class="eyebrow">${isGestao ? "ÁREA RESTRITA" : "REGISTRO DE PEDIDOS"}</span>
+                <h2>${accessTitle}</h2>
+                <p>${accessDescription}</p>
+              </div>
+
+              <form id="loginForm" class="form-stack">
+                <div class="field">
+                  <label>${emailLabel}</label>
+                  <input
+                    name="email"
+                    type="email"
+                    autocomplete="username"
+                    placeholder="${isGestao ? "gestao@..." : "vendas@..."}"
+                    required
+                  >
+                </div>
+
+                <div class="field">
+                  <label>Senha</label>
+                  <input
+                    name="password"
+                    type="password"
+                    autocomplete="current-password"
+                    required
+                  >
+                </div>
+
+                <div id="authError" class="error-box hidden"></div>
+
+                <button class="btn-primary access-submit" type="submit">
+                  ${buttonLabel}
+                </button>
+              </form>
+
+              <div class="access-security-note">
+                <strong>${isGestao ? "Gestão" : "Vendas"}</strong>
+                <span>
+                  ${
+                    isGestao
+                      ? "Este acesso abre o Registro de Vendas e o Controle."
+                      : "Este acesso abre somente o Registro de Vendas."
+                  }
+                </span>
+              </div>
+            `
+        }
       </div>
     </section>
   `;
 
-  app.querySelectorAll("[data-role]").forEach(b => b.onclick = () => {
-    state.roleIntent = b.dataset.role;
+  app.querySelectorAll("[data-role]").forEach((button) => {
+    button.onclick = () => {
+      state.roleIntent = button.dataset.role;
+      renderAuth();
+    };
+  });
+
+  app.querySelector("#backAccess")?.addEventListener("click", () => {
+    state.roleIntent = null;
     renderAuth();
   });
 
-  app.querySelector("#loginForm").onsubmit = async e => {
-    e.preventDefault();
-    const f = new FormData(e.target);
-    const box = app.querySelector("#authError");
-    box.classList.add("hidden");
-    try {
-      await login(f.get("email"), f.get("password"));
-    } catch (err) {
-      box.textContent = err.message;
-      box.classList.remove("hidden");
-    }
-  };
+  const form = app.querySelector("#loginForm");
+  if (form) {
+    form.onsubmit = async (event) => {
+      event.preventDefault();
+      const data = new FormData(event.target);
+      const box = app.querySelector("#authError");
+      box.classList.add("hidden");
+
+      try {
+        await login(data.get("email"), data.get("password"));
+      } catch (err) {
+        box.textContent = err.message;
+        box.classList.remove("hidden");
+      }
+    };
+  }
 }
 
 function sidebarHTML() {
@@ -264,7 +509,7 @@ function sidebarHTML() {
     <aside class="sidebar">
       <div class="side-brand">
         <img src="./public/logo-bolo-com-cafe.jpeg" alt="">
-        <div><strong>Bolo com Café</strong><small>Sistema de Gestão</small></div>
+        <div><strong>Bolo com Café</strong><small>${canControl ? "Gestão" : "Vendas"}</small></div>
       </div>
       <nav class="nav">
         <button data-view="sales" class="${state.view==="sales"?"active":""}">▣ Registro de Vendas</button>
@@ -384,36 +629,112 @@ function escapeHtml(v) {
 }
 
 function controlPageHTML() {
-  const report = buildReport(state.sales);
+  const period = getPeriodRange();
+  const report = buildReport(state.controlSales, state.historicalSales);
   const max = Math.max(1, ...report.flavorRanking.map(x => x.qty));
-  const bars = report.flavorRanking.slice(0,8).map(x => `
+
+  const bars = report.flavorRanking.slice(0,10).map(x => `
     <div class="bar-row">
-      <span>${x.name}</span>
+      <span>${escapeHtml(x.name)}</span>
       <div class="bar-track"><div class="bar-fill" style="width:${(x.qty/max)*100}%"></div></div>
       <strong>${x.qty}</strong>
     </div>`).join("");
 
-  const ranking = report.flavorRanking.slice(0,8).map((x,i) => `
-    <div class="rank-item"><span class="rank-pos">${i+1}</span><span>${x.name}</span><strong>${x.qty}</strong></div>
+  const ranking = report.flavorRanking.slice(0,10).map((x,i) => `
+    <div class="rank-item">
+      <span class="rank-pos">${i+1}</span>
+      <span>${escapeHtml(x.name)}</span>
+      <strong>${x.qty}</strong>
+    </div>
   `).join("");
 
   const summary = report.productSummary.map(x => `
-    <tr><td>${x.product}</td><td>${x.qty}</td><td>${money(x.revenue)}</td></tr>
+    <tr>
+      <td>${escapeHtml(x.product)}</td>
+      <td>${x.qty}</td>
+      <td>${report.revenueComplete ? money(x.revenue) : (x.revenue > 0 ? `${money(x.revenue)}*` : "—")}</td>
+    </tr>
   `).join("");
 
+  const referenceInput = state.controlPeriodType === "week"
+    ? `<input id="periodReference" type="date" value="${state.controlReferenceDate}">`
+    : `<input id="periodReference" type="month" value="${state.controlReferenceDate.slice(0,7)}">`;
+
+  const historicalNotice = buildHistoricalNotice(report);
+
+  const revenueDisplay = report.revenueComplete
+    ? money(report.revenue)
+    : (report.revenue > 0 ? `${money(report.revenue)}*` : "—");
+
+  const ordersDisplay = report.hasHistory
+    ? (report.orders > 0 ? `${report.orders}*` : "—")
+    : report.orders;
+
+  const ticketDisplay = report.hasHistory || !report.revenueComplete
+    ? "—"
+    : money(report.ticket);
+
   return `
-    <div class="topbar">
-      <div><h1>Controle</h1><p>Visão gerencial gerada automaticamente a partir do Registro de Vendas.</p></div>
+    <div class="topbar control-topbar">
       <div>
-        <input id="monthFilter" type="month" value="${state.month}" style="padding:10px;border:1px solid var(--line);border-radius:10px;background:white;">
+        <h1>Controle</h1>
+        <p>Visão gerencial conectada ao Registro de Vendas e ao histórico consolidado.</p>
+      </div>
+
+      <div class="export-actions">
+        <button id="exportPdfBtn" class="btn-secondary">Gerar PDF</button>
+        <button id="exportExcelBtn" class="btn-primary">Gerar Excel</button>
       </div>
     </div>
 
+    <section class="period-panel">
+      <div class="period-control">
+        <label>Período</label>
+        <select id="periodType">
+          <option value="week" ${state.controlPeriodType==="week"?"selected":""}>Semana</option>
+          <option value="fortnight1" ${state.controlPeriodType==="fortnight1"?"selected":""}>1ª quinzena</option>
+          <option value="fortnight2" ${state.controlPeriodType==="fortnight2"?"selected":""}>2ª quinzena</option>
+          <option value="month" ${state.controlPeriodType==="month"?"selected":""}>Mês</option>
+        </select>
+      </div>
+
+      <div class="period-control">
+        <label>${state.controlPeriodType === "week" ? "Data de referência" : "Mês de referência"}</label>
+        ${referenceInput}
+      </div>
+
+      <div class="period-result">
+        <span>Exibindo</span>
+        <strong>${escapeHtml(period.label)}</strong>
+      </div>
+    </section>
+
+    ${historicalNotice}
+
     <div class="kpis">
-      <div class="kpi"><span>Total vendido</span><strong>${report.totalItems}</strong></div>
-      <div class="kpi"><span>Faturamento</span><strong>${money(report.revenue)}</strong></div>
-      <div class="kpi"><span>Pedidos</span><strong>${report.orders}</strong></div>
-      <div class="kpi"><span>Ticket médio</span><strong>${money(report.ticket)}</strong></div>
+      <div class="kpi">
+        <span>Total vendido</span>
+        <strong>${report.totalItems}</strong>
+        <small>${report.hasHistory ? "inclui histórico consolidado" : "registros do período"}</small>
+      </div>
+
+      <div class="kpi">
+        <span>Faturamento</span>
+        <strong>${revenueDisplay}</strong>
+        <small>${report.revenueComplete ? "valores registrados" : "histórico antigo sem preços"}</small>
+      </div>
+
+      <div class="kpi">
+        <span>Pedidos</span>
+        <strong>${ordersDisplay}</strong>
+        <small>${report.hasHistory ? "não disponível no histórico mensal" : "pedidos registrados"}</small>
+      </div>
+
+      <div class="kpi">
+        <span>Ticket médio</span>
+        <strong>${ticketDisplay}</strong>
+        <small>${report.hasHistory ? "indisponível para histórico consolidado" : "faturamento ÷ pedidos"}</small>
+      </div>
     </div>
 
     <div class="control-grid">
@@ -430,27 +751,73 @@ function controlPageHTML() {
       <section class="card">
         <h3>Resumo por produto</h3>
         <table class="summary-table">
-          <thead><tr><th>Produto</th><th>Qtd.</th><th>Faturamento</th></tr></thead>
+          <thead>
+            <tr><th>Produto</th><th>Qtd.</th><th>Faturamento</th></tr>
+          </thead>
           <tbody>${summary}</tbody>
         </table>
+        ${report.hasHistory && !report.revenueComplete ? `<p class="data-note">* Valores financeiros não existiam na planilha histórica.</p>` : ""}
       </section>
 
       <section class="card">
-        <h3>Indicadores do mês</h3>
+        <h3>Indicadores do período</h3>
         <p><strong>Mais vendido:</strong> ${report.bestFlavor || "—"}</p>
         <p><strong>Menos vendido:</strong> ${report.worstFlavor || "—"}</p>
         <p><strong>Canal com mais pedidos:</strong> ${report.bestChannel || "—"}</p>
-        <p><strong>Faturamento médio por pedido:</strong> ${money(report.ticket)}</p>
+        <p><strong>Origem dos dados:</strong> ${report.hasHistory ? "Histórico + registros do sistema" : "Registro diário do sistema"}</p>
       </section>
     </div>
   `;
 }
 
-function buildReport(rows) {
+function buildHistoricalNotice(report) {
+  if (state.controlPeriodType !== "month") {
+    return `
+      <div class="history-note">
+        <strong>Filtro detalhado:</strong>
+        semana e quinzena utilizam apenas vendas com data registrada no sistema.
+        O histórico de janeiro a julho foi recebido consolidado por mês e não pode ser dividido com precisão por semana ou quinzena.
+      </div>
+    `;
+  }
+
+  if (state.historyMeta?.status === "pendente") {
+    return `
+      <div class="history-note warning-note">
+        <strong>Histórico pendente:</strong> ${escapeHtml(state.historyMeta.notes || "Este mês ainda não possui apuração histórica.")}
+      </div>
+    `;
+  }
+
+  if (state.historyMeta?.difference) {
+    return `
+      <div class="history-note warning-note">
+        <strong>Conferência histórica:</strong>
+        total informado ${state.historyMeta.reported_total}; soma detalhada ${state.historyMeta.detailed_total};
+        diferença ${state.historyMeta.difference}. ${escapeHtml(state.historyMeta.notes || "")}
+      </div>
+    `;
+  }
+
+  if (report.hasHistory) {
+    return `
+      <div class="history-note">
+        <strong>Histórico carregado:</strong>
+        os dados mensais anteriores foram normalizados e integrados ao Controle.
+      </div>
+    `;
+  }
+
+  return "";
+}
+
+function buildReport(rows, historicalRows = []) {
   let revenue = 0;
   let totalItems = 0;
+
   const flavorMap = {};
   const channelMap = {};
+
   const productSummary = {
     "Bolo inteiro": { qty:0, revenue:0 },
     "Bolo no pote": { qty:0, revenue:0 },
@@ -459,49 +826,261 @@ function buildReport(rows) {
   };
 
   rows.forEach(r => {
-    const add = (type, flavor, price) => {
+    const addDaily = (type, flavor, price) => {
       const p = Number(price || 0);
+
       if (flavor) {
         totalItems += 1;
         flavorMap[flavor] = (flavorMap[flavor] || 0) + 1;
         productSummary[type].qty += 1;
       }
+
       productSummary[type].revenue += p;
       revenue += p;
     };
-    add("Bolo inteiro", r.whole_cake_flavor, r.whole_cake_price);
-    add("Bolo no pote", r.pot_cake_flavor, r.pot_cake_price);
-    add("Fatia", r.slice_flavor, r.slice_price);
+
+    addDaily("Bolo inteiro", r.whole_cake_flavor, r.whole_cake_price);
+    addDaily("Bolo no pote", r.pot_cake_flavor, r.pot_cake_price);
+    addDaily("Fatia", r.slice_flavor, r.slice_price);
 
     const cookiePrice = Number(r.cookie_price || 0);
+
     if (r.cookie_size) {
       totalItems += 1;
       productSummary["Cookies"].qty += 1;
       flavorMap[`Cookie ${r.cookie_size}`] = (flavorMap[`Cookie ${r.cookie_size}`] || 0) + 1;
     }
+
     productSummary["Cookies"].revenue += cookiePrice;
     revenue += cookiePrice;
 
-    if (r.channel) channelMap[r.channel] = (channelMap[r.channel] || 0) + 1;
+    if (r.channel) {
+      channelMap[r.channel] = (channelMap[r.channel] || 0) + 1;
+    }
+  });
+
+  let hasUnpricedHistory = false;
+
+  historicalRows.forEach(r => {
+    const qty = Number(r.quantity || 0);
+    const type = r.product_type || "Bolo inteiro";
+    const flavor = r.flavor || "Não identificado";
+
+    if (!productSummary[type]) {
+      productSummary[type] = { qty:0, revenue:0 };
+    }
+
+    if (qty > 0) {
+      totalItems += qty;
+      flavorMap[flavor] = (flavorMap[flavor] || 0) + qty;
+      productSummary[type].qty += qty;
+    }
+
+    if (r.revenue === null || r.revenue === undefined) {
+      hasUnpricedHistory = true;
+    } else {
+      const histRevenue = Number(r.revenue || 0);
+      revenue += histRevenue;
+      productSummary[type].revenue += histRevenue;
+    }
   });
 
   const flavorRanking = Object.entries(flavorMap)
     .map(([name, qty]) => ({ name, qty }))
-    .sort((a,b) => b.qty - a.qty);
+    .filter(x => x.qty > 0)
+    .sort((a,b) => b.qty - a.qty || a.name.localeCompare(b.name, "pt-BR"));
 
-  const channels = Object.entries(channelMap).sort((a,b) => b[1] - a[1]);
+  const channels = Object.entries(channelMap)
+    .sort((a,b) => b[1] - a[1]);
+
+  const hasHistory = historicalRows.length > 0;
+  const revenueComplete = !hasUnpricedHistory;
 
   return {
     orders: rows.length,
     totalItems,
     revenue,
-    ticket: rows.length ? revenue / rows.length : 0,
+    ticket: rows.length && revenueComplete && !hasHistory ? revenue / rows.length : 0,
     flavorRanking,
     bestFlavor: flavorRanking[0]?.name,
     worstFlavor: flavorRanking.at(-1)?.name,
     bestChannel: channels[0]?.[0],
-    productSummary: Object.entries(productSummary).map(([product,v]) => ({ product, ...v }))
+    hasHistory,
+    revenueComplete,
+    productSummary: Object.entries(productSummary)
+      .map(([product,v]) => ({ product, ...v }))
+      .filter(x => x.qty > 0 || x.revenue > 0)
   };
+}
+
+function getCurrentControlReport() {
+  return {
+    period: getPeriodRange(),
+    report: buildReport(state.controlSales, state.historicalSales)
+  };
+}
+
+async function exportControlExcel() {
+  const { period, report } = getCurrentControlReport();
+
+  try {
+    const XLSX = await import("https://esm.sh/xlsx@0.18.5");
+    const workbook = XLSX.utils.book_new();
+
+    const summaryRows = [
+      ["BOLO COM CAFÉ - CONTROLE DE VENDAS"],
+      ["Período", period.label],
+      ["Total vendido", report.totalItems],
+      ["Faturamento", report.revenueComplete ? report.revenue : "Histórico sem preços"],
+      ["Pedidos registrados", report.hasHistory ? "Não disponível no histórico mensal" : report.orders],
+      ["Ticket médio", report.hasHistory ? "Não disponível no histórico mensal" : report.ticket],
+      ["Mais vendido", report.bestFlavor || ""],
+      ["Menos vendido", report.worstFlavor || ""],
+      ["Canal com mais pedidos", report.bestChannel || ""],
+      [],
+      ["Observação", state.historyMeta?.notes || ""]
+    ];
+
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(summaryRows), "Resumo");
+
+    const rankingRows = [
+      ["Posição", "Sabor", "Quantidade"],
+      ...report.flavorRanking.map((x, i) => [i + 1, x.name, x.qty])
+    ];
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rankingRows), "Ranking");
+
+    const productRows = [
+      ["Produto", "Quantidade", "Faturamento"],
+      ...report.productSummary.map(x => [
+        x.product,
+        x.qty,
+        report.revenueComplete ? x.revenue : (x.revenue || "")
+      ])
+    ];
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(productRows), "Produtos");
+
+    const dailyRows = [
+      [
+        "Data","Cliente","Canal",
+        "Bolo inteiro","Preço bolo inteiro",
+        "Bolo no pote","Preço bolo no pote",
+        "Fatia","Preço fatia",
+        "Cookie","Preço cookie",
+        "Observações"
+      ],
+      ...state.controlSales.map(r => [
+        r.sale_date || "",
+        r.client || "",
+        r.channel || "",
+        r.whole_cake_flavor || "",
+        Number(r.whole_cake_price || 0),
+        r.pot_cake_flavor || "",
+        Number(r.pot_cake_price || 0),
+        r.slice_flavor || "",
+        Number(r.slice_price || 0),
+        r.cookie_size || "",
+        Number(r.cookie_price || 0),
+        r.notes || ""
+      ])
+    ];
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(dailyRows), "Registro diário");
+
+    const historyRows = [
+      ["Mês", "Produto", "Sabor", "Quantidade", "Faturamento", "Fonte"],
+      ...state.historicalSales.map(r => [
+        r.reference_month || "",
+        r.product_type || "",
+        r.flavor || "",
+        Number(r.quantity || 0),
+        r.revenue ?? "",
+        r.source || ""
+      ])
+    ];
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(historyRows), "Histórico");
+
+    const fileKey = period.label
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-zA-Z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .toLowerCase();
+
+    XLSX.writeFile(workbook, `bolo-com-cafe-${fileKey}.xlsx`);
+  } catch (error) {
+    console.error(error);
+    alert("Não foi possível gerar o arquivo Excel.");
+  }
+}
+
+async function exportControlPdf() {
+  const { period, report } = getCurrentControlReport();
+
+  try {
+    const { jsPDF } = await import("https://esm.sh/jspdf@2.5.2");
+    const { default: autoTable } = await import("https://esm.sh/jspdf-autotable@3.8.4");
+
+    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+
+    doc.setFontSize(18);
+    doc.text("Bolo com Café - Controle de Vendas", 14, 18);
+
+    doc.setFontSize(10);
+    doc.text(`Período: ${period.label}`, 14, 26);
+
+    const revenueText = report.revenueComplete
+      ? money(report.revenue)
+      : "Não disponível no histórico";
+
+    const ordersText = report.hasHistory
+      ? "Não disponível no histórico"
+      : String(report.orders);
+
+    autoTable(doc, {
+      startY: 32,
+      head: [["Indicador", "Resultado"]],
+      body: [
+        ["Total vendido", String(report.totalItems)],
+        ["Faturamento", revenueText],
+        ["Pedidos", ordersText],
+        ["Mais vendido", report.bestFlavor || "—"],
+        ["Menos vendido", report.worstFlavor || "—"],
+        ["Canal com mais pedidos", report.bestChannel || "—"]
+      ],
+      styles: { fontSize: 9 },
+      headStyles: { fillColor: [74, 31, 24] }
+    });
+
+    const nextY = (doc.lastAutoTable?.finalY || 70) + 8;
+    doc.setFontSize(13);
+    doc.text("Ranking por sabor", 14, nextY);
+
+    autoTable(doc, {
+      startY: nextY + 4,
+      head: [["#", "Sabor", "Quantidade"]],
+      body: report.flavorRanking.slice(0, 20).map((x, i) => [
+        String(i + 1), x.name, String(x.qty)
+      ]),
+      styles: { fontSize: 8.5 },
+      headStyles: { fillColor: [107, 48, 36] }
+    });
+
+    if (state.historyMeta?.notes) {
+      const noteY = (doc.lastAutoTable?.finalY || 120) + 8;
+      doc.setFontSize(8.5);
+      const lines = doc.splitTextToSize(`Observação: ${state.historyMeta.notes}`, 180);
+      doc.text(lines, 14, noteY);
+    }
+
+    const fileKey = period.label
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-zA-Z0-9]+/g, "-")
+      .replace(/^-|-$/g, "")
+      .toLowerCase();
+
+    doc.save(`bolo-com-cafe-${fileKey}.pdf`);
+  } catch (error) {
+    console.error(error);
+    alert("Não foi possível gerar o PDF.");
+  }
 }
 
 function bindSalesPage() {
@@ -542,11 +1121,26 @@ function bindSalesPage() {
 
 function bindControlPage() {
   const root = document.querySelector("#main");
-  root.querySelector("#monthFilter")?.addEventListener("change", async e => {
-    state.month = e.target.value;
-    await loadSales();
+
+  root.querySelector("#periodType")?.addEventListener("change", async e => {
+    state.controlPeriodType = e.target.value;
+    await loadControlData();
     renderMainOnly();
   });
+
+  root.querySelector("#periodReference")?.addEventListener("change", async e => {
+    if (state.controlPeriodType === "week") {
+      state.controlReferenceDate = e.target.value;
+    } else {
+      state.controlReferenceDate = `${e.target.value}-01`;
+    }
+
+    await loadControlData();
+    renderMainOnly();
+  });
+
+  root.querySelector("#exportExcelBtn")?.addEventListener("click", exportControlExcel);
+  root.querySelector("#exportPdfBtn")?.addEventListener("click", exportControlPdf);
 }
 
 function renderMainOnly() {
@@ -558,16 +1152,26 @@ function renderMainOnly() {
 
 function renderApp() {
   const app = document.querySelector("#app");
+
   app.innerHTML = `
     <div class="dashboard">
       ${sidebarHTML()}
       <main class="content" id="main"></main>
     </div>
   `;
-  app.querySelectorAll("[data-view]").forEach(btn => btn.onclick = () => {
+
+  app.querySelectorAll("[data-view]").forEach(btn => btn.onclick = async () => {
     state.view = btn.dataset.view;
+
+    if (state.view === "control") {
+      await loadControlData();
+    } else {
+      await loadSales();
+    }
+
     renderApp();
   });
+
   app.querySelector("#logoutBtn").onclick = logout;
   renderMainOnly();
 }
