@@ -19,7 +19,46 @@ const SLICE_FLAVORS = [
 
 const POT_FLAVORS = ["Oreo","Dois amores","Chocolate","Ovomaltine"];
 const COOKIE_SIZES = ["Pequeno","Grande"];
-const CHANNELS = ["WhatsApp","Instagram","Balcão","Telefone","iFood","Outro"];
+const CHANNELS = ["WhatsApp","Anotaí"];
+
+const SALES_TABS = {
+  cake: {
+    label: "Bolos",
+    singular: "Bolo",
+    flavorField: "whole_cake_flavor",
+    qtyField: "whole_cake_qty",
+    priceField: "whole_cake_price",
+    choices: CAKE_FLAVORS,
+    choiceLabel: "Sabor"
+  },
+  pot: {
+    label: "Bolo no Pote",
+    singular: "Bolo no pote",
+    flavorField: "pot_cake_flavor",
+    qtyField: "pot_cake_qty",
+    priceField: "pot_cake_price",
+    choices: POT_FLAVORS,
+    choiceLabel: "Sabor"
+  },
+  slice: {
+    label: "Fatias",
+    singular: "Fatia",
+    flavorField: "slice_flavor",
+    qtyField: "slice_qty",
+    priceField: "slice_price",
+    choices: SLICE_FLAVORS,
+    choiceLabel: "Sabor"
+  },
+  cookie: {
+    label: "Cookies",
+    singular: "Cookie",
+    flavorField: "cookie_size",
+    qtyField: "cookie_qty",
+    priceField: "cookie_price",
+    choices: COOKIE_SIZES,
+    choiceLabel: "Tamanho"
+  }
+};
 
 const state = {
   session: null,
@@ -30,6 +69,7 @@ const state = {
   // Registro diário
   sales: [],
   month: new Date().toISOString().slice(0,7),
+  activeSalesTab: "cake",
 
   // Controle gerencial
   controlSales: [],
@@ -61,7 +101,34 @@ function dateBR(v) {
   return `${d}/${m}/${y}`;
 }
 function options(items, selected = "") {
-  return `<option value=""></option>` + items.map(x => `<option ${x===selected?"selected":""}>${x}</option>`).join("");
+  return `<option value=""></option>` + items
+    .map(x => `<option ${x===selected?"selected":""}>${escapeHtml(x)}</option>`)
+    .join("");
+}
+
+function channelOptions(selected = "", isNew = false) {
+  const current = selected || "";
+  const legacy = current && !CHANNELS.includes(current) && !isNew
+    ? `<option value="${escapeHtml(current)}" selected>${escapeHtml(current)} (registro anterior)</option>`
+    : "";
+
+  return `<option value=""></option>${legacy}` + CHANNELS
+    .map(x => `<option value="${escapeHtml(x)}" ${x===current?"selected":""}>${escapeHtml(x)}</option>`)
+    .join("");
+}
+
+function getSalesTabConfig(category = state.activeSalesTab) {
+  return SALES_TABS[category] || SALES_TABS.cake;
+}
+
+function saleBelongsToCategory(sale, category = state.activeSalesTab) {
+  const config = getSalesTabConfig(category);
+  return Boolean(sale?.[config.flavorField]);
+}
+
+function saleLineTotal(sale, category = state.activeSalesTab) {
+  const config = getSalesTabConfig(category);
+  return Number(sale?.[config.qtyField] || 0) * Number(sale?.[config.priceField] || 0);
 }
 
 async function bootstrap() {
@@ -304,17 +371,27 @@ async function saveSale(row) {
     sale_date: row.sale_date || new Date().toISOString().slice(0,10),
     client: row.client || null,
     channel: row.channel || null,
+
     whole_cake_flavor: row.whole_cake_flavor || null,
+    whole_cake_qty: Number(row.whole_cake_qty || 0),
     whole_cake_price: Number(row.whole_cake_price || 0),
+
     pot_cake_flavor: row.pot_cake_flavor || null,
+    pot_cake_qty: Number(row.pot_cake_qty || 0),
     pot_cake_price: Number(row.pot_cake_price || 0),
+
     slice_flavor: row.slice_flavor || null,
+    slice_qty: Number(row.slice_qty || 0),
     slice_price: Number(row.slice_price || 0),
+
     cookie_size: row.cookie_size || null,
+    cookie_qty: Number(row.cookie_qty || 0),
     cookie_price: Number(row.cookie_price || 0),
+
     notes: row.notes || null,
     created_by: state.session.user.id
   };
+
   const { error } = await supabase.from("sales").insert(payload);
   if (error) throw error;
 }
@@ -324,17 +401,27 @@ async function updateSale(id, row) {
     sale_date: row.sale_date,
     client: row.client || null,
     channel: row.channel || null,
+
     whole_cake_flavor: row.whole_cake_flavor || null,
+    whole_cake_qty: Number(row.whole_cake_qty || 0),
     whole_cake_price: Number(row.whole_cake_price || 0),
+
     pot_cake_flavor: row.pot_cake_flavor || null,
+    pot_cake_qty: Number(row.pot_cake_qty || 0),
     pot_cake_price: Number(row.pot_cake_price || 0),
+
     slice_flavor: row.slice_flavor || null,
+    slice_qty: Number(row.slice_qty || 0),
     slice_price: Number(row.slice_price || 0),
+
     cookie_size: row.cookie_size || null,
+    cookie_qty: Number(row.cookie_qty || 0),
     cookie_price: Number(row.cookie_price || 0),
+
     notes: row.notes || null,
     updated_at: new Date().toISOString()
   };
+
   const { error } = await supabase.from("sales").update(payload).eq("id", id);
   if (error) throw error;
 }
@@ -342,26 +429,55 @@ async function updateSale(id, row) {
 async function deleteSale(id) {
   if (state.profile?.role !== "gestao") return;
   if (!confirm("Excluir este registro?")) return;
+
   const { error } = await supabase.from("sales").delete().eq("id", id);
   if (error) alert(error.message);
 }
 
-function getRowData(tr) {
+function getCategoryRowData(tr, category = state.activeSalesTab) {
+  const config = getSalesTabConfig(category);
   const q = (name) => tr.querySelector(`[name="${name}"]`)?.value || "";
-  return {
+
+  const row = {
     sale_date: q("sale_date"),
     client: q("client"),
     channel: q("channel"),
-    whole_cake_flavor: q("whole_cake_flavor"),
-    whole_cake_price: q("whole_cake_price"),
-    pot_cake_flavor: q("pot_cake_flavor"),
-    pot_cake_price: q("pot_cake_price"),
-    slice_flavor: q("slice_flavor"),
-    slice_price: q("slice_price"),
-    cookie_size: q("cookie_size"),
-    cookie_price: q("cookie_price"),
+    whole_cake_flavor: null,
+    whole_cake_qty: 0,
+    whole_cake_price: 0,
+    pot_cake_flavor: null,
+    pot_cake_qty: 0,
+    pot_cake_price: 0,
+    slice_flavor: null,
+    slice_qty: 0,
+    slice_price: 0,
+    cookie_size: null,
+    cookie_qty: 0,
+    cookie_price: 0,
     notes: q("notes")
   };
+
+  row[config.flavorField] = q("product_choice");
+  row[config.qtyField] = Number(q("quantity") || 0);
+  row[config.priceField] = Number(q("unit_price") || 0);
+
+  return row;
+}
+
+function bindLineTotal(tr) {
+  const qty = tr.querySelector('[name="quantity"]');
+  const price = tr.querySelector('[name="unit_price"]');
+  const output = tr.querySelector("[data-line-total]");
+
+  if (!qty || !price || !output) return;
+
+  const refresh = () => {
+    output.textContent = money(Number(qty.value || 0) * Number(price.value || 0));
+  };
+
+  qty.addEventListener("input", refresh);
+  price.addEventListener("input", refresh);
+  refresh();
 }
 
 function renderAuth() {
@@ -527,93 +643,154 @@ function sidebarHTML() {
 }
 
 function salesPageHTML() {
-  const rows = state.sales.map(s => saleRowHTML(s)).join("");
+  const category = state.activeSalesTab;
+  const config = getSalesTabConfig(category);
+  const filteredSales = state.sales.filter(s => saleBelongsToCategory(s, category));
+  const rows = filteredSales.map(s => saleRowHTML(s, category)).join("");
+
+  const tabButtons = Object.entries(SALES_TABS).map(([key, tab]) => {
+    const count = state.sales.filter(s => saleBelongsToCategory(s, key)).length;
+    return `
+      <button
+        type="button"
+        class="sales-tab ${category===key ? "active" : ""}"
+        data-sales-tab="${key}"
+      >
+        <span>${tab.label}</span>
+        <small>${count}</small>
+      </button>
+    `;
+  }).join("");
+
   return `
     <div class="topbar">
-      <div><h1>Registro de Vendas</h1><p>Registre os pedidos. O Controle é atualizado automaticamente.</p></div>
+      <div>
+        <h1>Registro de Vendas</h1>
+        <p>Registre cada produto na sua aba. O Controle é atualizado automaticamente.</p>
+      </div>
       <div class="sync-pill"><span class="sync-dot"></span> Conectado ao Controle</div>
     </div>
 
     <section class="panel">
       <div class="panel-head">
-        <div><h2>Planilha de registro</h2><p>Uma linha por pedido.</p></div>
+        <div>
+          <h2>Planilha de registro</h2>
+          <p>Uma linha por produto/sabor. Use Quantidade quando o cliente pedir mais de uma unidade.</p>
+        </div>
         <button id="addRowBtn" class="btn-primary">+ Nova linha</button>
+      </div>
+
+      <div class="sales-tabs" role="tablist" aria-label="Categorias de produtos">
+        ${tabButtons}
       </div>
 
       <div class="toolbar">
         <label>Mês <input id="monthFilter" type="month" value="${state.month}"></label>
+        <div class="toolbar-context">
+          <strong>${config.label}</strong>
+          <span>${filteredSales.length} registro(s) nesta aba</span>
+        </div>
       </div>
 
       <div class="table-wrap">
-        <table class="sales-table">
+        <table class="sales-table compact-sales-table">
           <thead>
             <tr>
               <th>DATA</th>
               <th>CLIENTE</th>
               <th>CANAL DO PEDIDO</th>
-              <th>BOLO INTEIRO - sabor</th>
-              <th>PREÇO</th>
-              <th>BOLO NO POTE - sabor</th>
-              <th>PREÇO</th>
-              <th>FATIA - sabor</th>
-              <th>PREÇO</th>
-              <th>COOKIES (P ou G)</th>
-              <th>PREÇO</th>
+              <th>${config.choiceLabel.toUpperCase()}</th>
+              <th>QUANTIDADE</th>
+              <th>PREÇO UNITÁRIO</th>
+              <th>TOTAL</th>
               <th>OBSERVAÇÕES</th>
               <th>AÇÕES</th>
             </tr>
           </thead>
           <tbody id="salesBody">
-            ${newRowHTML()}
-            ${rows || ""}
+            ${newRowHTML(category)}
+            ${rows}
           </tbody>
         </table>
       </div>
 
       <div class="panel-foot">
-        <span class="muted">${state.sales.length} registro(s) em ${state.month}</span>
-        <span class="muted">Todos os registros alimentam o Controle automaticamente.</span>
+        <span class="muted">
+          ${filteredSales.length} registro(s) de ${config.label.toLowerCase()} em ${state.month}
+        </span>
+        <span class="muted">
+          Quantidade × preço unitário = total da linha.
+        </span>
       </div>
     </section>
   `;
 }
 
-function newRowHTML() {
+function newRowHTML(category = state.activeSalesTab) {
+  const config = getSalesTabConfig(category);
+
   return `
-    <tr data-new-row>
-      <td><input name="sale_date" type="date" value="${new Date().toISOString().slice(0,10)}"></td>
-      <td><input class="client-input" name="client" placeholder="Cliente"></td>
-      <td><select name="channel">${options(CHANNELS)}</select></td>
-      <td><select name="whole_cake_flavor">${options(CAKE_FLAVORS)}</select></td>
-      <td><input class="price-input" name="whole_cake_price" type="number" min="0" step=".01" placeholder="0,00"></td>
-      <td><select name="pot_cake_flavor">${options(POT_FLAVORS)}</select></td>
-      <td><input class="price-input" name="pot_cake_price" type="number" min="0" step=".01" placeholder="0,00"></td>
-      <td><select name="slice_flavor">${options(SLICE_FLAVORS)}</select></td>
-      <td><input class="price-input" name="slice_price" type="number" min="0" step=".01" placeholder="0,00"></td>
-      <td><select name="cookie_size">${options(COOKIE_SIZES)}</select></td>
-      <td><input class="price-input" name="cookie_price" type="number" min="0" step=".01" placeholder="0,00"></td>
-      <td><input class="obs-input" name="notes" placeholder="Observações"></td>
-      <td><button class="icon-btn save-new" title="Salvar">Salvar</button></td>
+    <tr data-new-row data-category="${category}">
+      <td>
+        <input name="sale_date" type="date" value="${new Date().toISOString().slice(0,10)}">
+      </td>
+      <td>
+        <input class="client-input" name="client" placeholder="Cliente">
+      </td>
+      <td>
+        <select name="channel">${channelOptions("", true)}</select>
+      </td>
+      <td>
+        <select name="product_choice">${options(config.choices)}</select>
+      </td>
+      <td>
+        <input class="qty-input" name="quantity" type="number" min="1" step="1" value="1">
+      </td>
+      <td>
+        <input class="price-input" name="unit_price" type="number" min="0" step=".01" placeholder="0,00">
+      </td>
+      <td class="line-total" data-line-total>${money(0)}</td>
+      <td>
+        <input class="obs-input" name="notes" placeholder="Observações">
+      </td>
+      <td>
+        <button class="icon-btn save-new" title="Salvar">Salvar</button>
+      </td>
     </tr>
   `;
 }
 
-function saleRowHTML(s) {
+function saleRowHTML(s, category = state.activeSalesTab) {
   const canDelete = state.profile?.role === "gestao";
+  const config = getSalesTabConfig(category);
+  const quantity = Number(s[config.qtyField] || 0) || 1;
+  const unitPrice = Number(s[config.priceField] || 0);
+  const choice = s[config.flavorField] || "";
+
   return `
-    <tr data-id="${s.id}">
-      <td><input name="sale_date" type="date" value="${s.sale_date || ""}"></td>
-      <td><input class="client-input" name="client" value="${escapeHtml(s.client || "")}"></td>
-      <td><select name="channel">${options(CHANNELS, s.channel || "")}</select></td>
-      <td><select name="whole_cake_flavor">${options(CAKE_FLAVORS, s.whole_cake_flavor || "")}</select></td>
-      <td><input class="price-input" name="whole_cake_price" type="number" min="0" step=".01" value="${Number(s.whole_cake_price || 0)}"></td>
-      <td><select name="pot_cake_flavor">${options(POT_FLAVORS, s.pot_cake_flavor || "")}</select></td>
-      <td><input class="price-input" name="pot_cake_price" type="number" min="0" step=".01" value="${Number(s.pot_cake_price || 0)}"></td>
-      <td><select name="slice_flavor">${options(SLICE_FLAVORS, s.slice_flavor || "")}</select></td>
-      <td><input class="price-input" name="slice_price" type="number" min="0" step=".01" value="${Number(s.slice_price || 0)}"></td>
-      <td><select name="cookie_size">${options(COOKIE_SIZES, s.cookie_size || "")}</select></td>
-      <td><input class="price-input" name="cookie_price" type="number" min="0" step=".01" value="${Number(s.cookie_price || 0)}"></td>
-      <td><input class="obs-input" name="notes" value="${escapeHtml(s.notes || "")}"></td>
+    <tr data-id="${s.id}" data-category="${category}">
+      <td>
+        <input name="sale_date" type="date" value="${s.sale_date || ""}">
+      </td>
+      <td>
+        <input class="client-input" name="client" value="${escapeHtml(s.client || "")}">
+      </td>
+      <td>
+        <select name="channel">${channelOptions(s.channel || "", false)}</select>
+      </td>
+      <td>
+        <select name="product_choice">${options(config.choices, choice)}</select>
+      </td>
+      <td>
+        <input class="qty-input" name="quantity" type="number" min="1" step="1" value="${quantity}">
+      </td>
+      <td>
+        <input class="price-input" name="unit_price" type="number" min="0" step=".01" value="${unitPrice}">
+      </td>
+      <td class="line-total" data-line-total>${money(quantity * unitPrice)}</td>
+      <td>
+        <input class="obs-input" name="notes" value="${escapeHtml(s.notes || "")}">
+      </td>
       <td>
         <div class="row-actions">
           <button class="icon-btn update-row">Salvar</button>
@@ -826,33 +1003,49 @@ function buildReport(rows, historicalRows = []) {
   };
 
   rows.forEach(r => {
-    const addDaily = (type, flavor, price) => {
-      const p = Number(price || 0);
+    const addDaily = (type, flavor, qty, unitPrice, rankingLabel = flavor) => {
+      const quantity = flavor ? Math.max(1, Number(qty || 0)) : 0;
+      const price = Number(unitPrice || 0);
+      const lineRevenue = quantity * price;
 
-      if (flavor) {
-        totalItems += 1;
-        flavorMap[flavor] = (flavorMap[flavor] || 0) + 1;
-        productSummary[type].qty += 1;
+      if (flavor && quantity > 0) {
+        totalItems += quantity;
+        flavorMap[rankingLabel] = (flavorMap[rankingLabel] || 0) + quantity;
+        productSummary[type].qty += quantity;
       }
 
-      productSummary[type].revenue += p;
-      revenue += p;
+      productSummary[type].revenue += lineRevenue;
+      revenue += lineRevenue;
     };
 
-    addDaily("Bolo inteiro", r.whole_cake_flavor, r.whole_cake_price);
-    addDaily("Bolo no pote", r.pot_cake_flavor, r.pot_cake_price);
-    addDaily("Fatia", r.slice_flavor, r.slice_price);
+    addDaily(
+      "Bolo inteiro",
+      r.whole_cake_flavor,
+      r.whole_cake_qty,
+      r.whole_cake_price
+    );
 
-    const cookiePrice = Number(r.cookie_price || 0);
+    addDaily(
+      "Bolo no pote",
+      r.pot_cake_flavor,
+      r.pot_cake_qty,
+      r.pot_cake_price
+    );
 
-    if (r.cookie_size) {
-      totalItems += 1;
-      productSummary["Cookies"].qty += 1;
-      flavorMap[`Cookie ${r.cookie_size}`] = (flavorMap[`Cookie ${r.cookie_size}`] || 0) + 1;
-    }
+    addDaily(
+      "Fatia",
+      r.slice_flavor,
+      r.slice_qty,
+      r.slice_price
+    );
 
-    productSummary["Cookies"].revenue += cookiePrice;
-    revenue += cookiePrice;
+    addDaily(
+      "Cookies",
+      r.cookie_size,
+      r.cookie_qty,
+      r.cookie_price,
+      r.cookie_size ? `Cookie ${r.cookie_size}` : ""
+    );
 
     if (r.channel) {
       channelMap[r.channel] = (channelMap[r.channel] || 0) + 1;
@@ -962,24 +1155,37 @@ async function exportControlExcel() {
     const dailyRows = [
       [
         "Data","Cliente","Canal",
-        "Bolo inteiro","Preço bolo inteiro",
-        "Bolo no pote","Preço bolo no pote",
-        "Fatia","Preço fatia",
-        "Cookie","Preço cookie",
+        "Bolo inteiro","Qtd. bolo inteiro","Preço unitário bolo","Total bolo",
+        "Bolo no pote","Qtd. pote","Preço unitário pote","Total pote",
+        "Fatia","Qtd. fatia","Preço unitário fatia","Total fatia",
+        "Cookie","Qtd. cookie","Preço unitário cookie","Total cookie",
         "Observações"
       ],
       ...state.controlSales.map(r => [
         r.sale_date || "",
         r.client || "",
         r.channel || "",
+
         r.whole_cake_flavor || "",
+        Number(r.whole_cake_qty || 0),
         Number(r.whole_cake_price || 0),
+        Number(r.whole_cake_qty || 0) * Number(r.whole_cake_price || 0),
+
         r.pot_cake_flavor || "",
+        Number(r.pot_cake_qty || 0),
         Number(r.pot_cake_price || 0),
+        Number(r.pot_cake_qty || 0) * Number(r.pot_cake_price || 0),
+
         r.slice_flavor || "",
+        Number(r.slice_qty || 0),
         Number(r.slice_price || 0),
+        Number(r.slice_qty || 0) * Number(r.slice_price || 0),
+
         r.cookie_size || "",
+        Number(r.cookie_qty || 0),
         Number(r.cookie_price || 0),
+        Number(r.cookie_qty || 0) * Number(r.cookie_price || 0),
+
         r.notes || ""
       ])
     ];
@@ -1085,33 +1291,87 @@ async function exportControlPdf() {
 
 function bindSalesPage() {
   const root = document.querySelector("#main");
+
   root.querySelector("#monthFilter")?.addEventListener("change", async e => {
     state.month = e.target.value;
     await loadSales();
     renderMainOnly();
   });
 
+  root.querySelectorAll("[data-sales-tab]").forEach(button => {
+    button.addEventListener("click", () => {
+      state.activeSalesTab = button.dataset.salesTab;
+      renderMainOnly();
+    });
+  });
+
   root.querySelector("#addRowBtn")?.addEventListener("click", () => {
     root.querySelector("[data-new-row] input[name='client']")?.focus();
   });
 
+  root.querySelectorAll("#salesBody tr").forEach(bindLineTotal);
+
   root.querySelector(".save-new")?.addEventListener("click", async e => {
     const tr = e.target.closest("tr");
+    const category = tr.dataset.category || state.activeSalesTab;
+    const row = getCategoryRowData(tr, category);
+
+    if (!row.client) {
+      alert("Informe o cliente.");
+      return;
+    }
+
+    if (!row.channel) {
+      alert("Escolha WhatsApp ou Anotaí.");
+      return;
+    }
+
+    const config = getSalesTabConfig(category);
+
+    if (!row[config.flavorField]) {
+      alert(`Escolha ${config.choiceLabel.toLowerCase()}.`);
+      return;
+    }
+
+    if (Number(row[config.qtyField] || 0) < 1) {
+      alert("A quantidade deve ser pelo menos 1.");
+      return;
+    }
+
     try {
-      await saveSale(getRowData(tr));
+      await saveSale(row);
+
       tr.querySelectorAll("input,select").forEach(x => {
         if (x.name === "sale_date") return;
+        if (x.name === "quantity") {
+          x.value = "1";
+          return;
+        }
         x.value = "";
       });
-    } catch (err) { alert(err.message); }
+
+      bindLineTotal(tr);
+    } catch (err) {
+      alert(err.message);
+    }
   });
 
   root.querySelectorAll(".update-row").forEach(btn => btn.addEventListener("click", async e => {
     const tr = e.target.closest("tr");
+    const category = tr.dataset.category || state.activeSalesTab;
+    const row = getCategoryRowData(tr, category);
+
+    if (!row.channel) {
+      alert("Escolha WhatsApp ou Anotaí.");
+      return;
+    }
+
     try {
-      await updateSale(tr.dataset.id, getRowData(tr));
+      await updateSale(tr.dataset.id, row);
       alert("Registro atualizado.");
-    } catch (err) { alert(err.message); }
+    } catch (err) {
+      alert(err.message);
+    }
   }));
 
   root.querySelectorAll(".delete-row").forEach(btn => btn.addEventListener("click", e => {

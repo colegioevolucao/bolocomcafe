@@ -701,3 +701,108 @@ button { cursor: pointer; }
     grid-column: auto;
   }
 }
+
+
+/* ===== REGISTRO EM 4 ABAS ===== */
+.sales-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 16px 22px 0;
+  background: #fffaf6;
+}
+
+.sales-tab {
+  border: 1px solid var(--line);
+  background: white;
+  color: var(--coffee);
+  border-radius: 13px 13px 0 0;
+  padding: 13px 15px;
+  font-weight: 800;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.sales-tab small {
+  display: grid;
+  place-items: center;
+  min-width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  background: #f6e7da;
+  color: var(--coffee-2);
+  font-size: 11px;
+}
+
+.sales-tab.active {
+  background: var(--coffee);
+  border-color: var(--coffee);
+  color: white;
+}
+
+.sales-tab.active small {
+  background: var(--peach);
+  color: var(--coffee);
+}
+
+.toolbar-context {
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 180px;
+}
+
+.toolbar-context strong {
+  color: var(--coffee);
+}
+
+.toolbar-context span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.compact-sales-table {
+  min-width: 1080px;
+}
+
+.compact-sales-table .qty-input {
+  min-width: 82px;
+  width: 82px;
+}
+
+.compact-sales-table .price-input {
+  min-width: 110px;
+}
+
+.compact-sales-table .line-total {
+  min-width: 112px;
+  white-space: nowrap;
+  font-weight: 800;
+  color: var(--coffee);
+}
+
+.compact-sales-table select[name="product_choice"] {
+  min-width: 180px;
+}
+
+.compact-sales-table select[name="channel"] {
+  min-width: 130px;
+}
+
+@media (max-width: 800px) {
+  .sales-tabs {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .sales-tab {
+    border-radius: 12px;
+  }
+
+  .toolbar-context {
+    width: 100%;
+    margin-left: 0;
+  }
+}
