@@ -14,12 +14,13 @@ const CAKE_FLAVORS = [
 ];
 
 const SLICE_FLAVORS = [
-  "Brownie Maluco","Bolo de Noiva","Laranja","Limão Siciliano","Cenoura","Brownie"
+  "Brownie","Bolo de Noiva","Laranja","Limão Siciliano","Cenoura","Queijo com goiabada"
 ];
 
 const POT_FLAVORS = ["Oreo","Dois amores","Chocolate","Ovomaltine"];
 const COOKIE_SIZES = ["Pequeno","Grande"];
-const CHANNELS = ["WhatsApp","Anotaí"];
+const CHANNELS = ["WhatsApp","Anotaí","Balcão"];
+const PAYMENT_STATUSES = ["Pendente","Pago"];
 
 const SALES_TABS = {
   cake: {
@@ -101,8 +102,25 @@ function dateBR(v) {
   return `${d}/${m}/${y}`;
 }
 function options(items, selected = "") {
-  return `<option value=""></option>` + items
-    .map(x => `<option ${x===selected?"selected":""}>${escapeHtml(x)}</option>`)
+  const current = selected || "";
+  const legacy = current && !items.includes(current)
+    ? `<option value="${escapeHtml(current)}" selected>${escapeHtml(current)} (registro anterior)</option>`
+    : "";
+
+  return `<option value=""></option>${legacy}` + items
+    .map(x => `<option value="${escapeHtml(x)}" ${x===current?"selected":""}>${escapeHtml(x)}</option>`)
+    .join("");
+}
+
+function paymentStatusOptions(selected = "", isNew = false) {
+  const current = selected || (isNew ? "Pendente" : "");
+  const values = [
+    { value: "pendente", label: "Pendente" },
+    { value: "pago", label: "Pago" }
+  ];
+
+  return `<option value="">Não informado</option>` + values
+    .map(item => `<option value="${item.value}" ${item.value===current || item.label===current ? "selected" : ""}>${item.label}</option>`)
     .join("");
 }
 
@@ -389,6 +407,7 @@ async function saveSale(row) {
     cookie_price: Number(row.cookie_price || 0),
 
     notes: row.notes || null,
+    payment_status: row.payment_status || null,
     created_by: state.session.user.id
   };
 
@@ -419,6 +438,7 @@ async function updateSale(id, row) {
     cookie_price: Number(row.cookie_price || 0),
 
     notes: row.notes || null,
+    payment_status: row.payment_status || null,
     updated_at: new Date().toISOString()
   };
 
@@ -454,7 +474,8 @@ function getCategoryRowData(tr, category = state.activeSalesTab) {
     cookie_size: null,
     cookie_qty: 0,
     cookie_price: 0,
-    notes: q("notes")
+    notes: q("notes"),
+    payment_status: q("payment_status")
   };
 
   row[config.flavorField] = q("product_choice");
@@ -703,6 +724,7 @@ function salesPageHTML() {
               <th>QUANTIDADE</th>
               <th>PREÇO UNITÁRIO</th>
               <th>TOTAL</th>
+              <th>PAGAMENTO</th>
               <th>OBSERVAÇÕES</th>
               <th>AÇÕES</th>
             </tr>
@@ -751,6 +773,9 @@ function newRowHTML(category = state.activeSalesTab) {
       </td>
       <td class="line-total" data-line-total>${money(0)}</td>
       <td>
+        <select name="payment_status">${paymentStatusOptions("", true)}</select>
+      </td>
+      <td>
         <input class="obs-input" name="notes" placeholder="Observações">
       </td>
       <td>
@@ -788,6 +813,9 @@ function saleRowHTML(s, category = state.activeSalesTab) {
         <input class="price-input" name="unit_price" type="number" min="0" step=".01" value="${unitPrice}">
       </td>
       <td class="line-total" data-line-total>${money(quantity * unitPrice)}</td>
+      <td>
+        <select name="payment_status">${paymentStatusOptions(s.payment_status || "", false)}</select>
+      </td>
       <td>
         <input class="obs-input" name="notes" value="${escapeHtml(s.notes || "")}">
       </td>
@@ -1159,7 +1187,7 @@ async function exportControlExcel() {
         "Bolo no pote","Qtd. pote","Preço unitário pote","Total pote",
         "Fatia","Qtd. fatia","Preço unitário fatia","Total fatia",
         "Cookie","Qtd. cookie","Preço unitário cookie","Total cookie",
-        "Observações"
+        "Pagamento","Observações"
       ],
       ...state.controlSales.map(r => [
         r.sale_date || "",
@@ -1186,6 +1214,7 @@ async function exportControlExcel() {
         Number(r.cookie_price || 0),
         Number(r.cookie_qty || 0) * Number(r.cookie_price || 0),
 
+        r.payment_status === "pago" ? "Pago" : (r.payment_status === "pendente" ? "Pendente" : "Não informado"),
         r.notes || ""
       ])
     ];
@@ -1322,7 +1351,7 @@ function bindSalesPage() {
     }
 
     if (!row.channel) {
-      alert("Escolha WhatsApp ou Anotaí.");
+      alert("Escolha WhatsApp, Anotaí ou Balcão.");
       return;
     }
 
@@ -1362,7 +1391,7 @@ function bindSalesPage() {
     const row = getCategoryRowData(tr, category);
 
     if (!row.channel) {
-      alert("Escolha WhatsApp ou Anotaí.");
+      alert("Escolha WhatsApp, Anotaí ou Balcão.");
       return;
     }
 
