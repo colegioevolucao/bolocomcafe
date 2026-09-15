@@ -19,6 +19,14 @@ const SLICE_FLAVORS = [
 
 const POT_FLAVORS = ["Oreo","Dois amores","Chocolate","Ovomaltine"];
 const COOKIE_SIZES = ["Pequeno","Grande"];
+const EXTRA_PORTION_FLAVORS = [
+  "Brigadeiro preto",
+  "Brigadeiro branco",
+  "Goiabada",
+  "Cocada",
+  "Doce de leite",
+  "Mousse de limão"
+];
 const CHANNELS = ["WhatsApp","Anotaí","Balcão"];
 const PAYMENT_STATUSES = ["Pendente","Pago"];
 
@@ -61,6 +69,10 @@ const SALES_TABS = {
   }
 };
 
+function supportsExtraPortion(category) {
+  return category === "cake" || category === "slice";
+}
+
 const state = {
   session: null,
   profile: null,
@@ -70,14 +82,30 @@ const state = {
   // Registro diário
   sales: [],
   month: new Date().toISOString().slice(0,7),
-  activeSalesTab: "cake",
+  activeSalesTab: "today",
 
   // Controle gerencial
   controlSales: [],
+  controlTodaySales: [],
   historicalSales: [],
   historyMeta: null,
+  controlView: "today",
   controlPeriodType: "month",
   controlReferenceDate: new Date().toISOString().slice(0,10),
+
+  // Financeiro
+  financeSales: [],
+  financeView: "pending",
+  financePendingPeriodType: "all",
+  financePaidPeriodType: "today",
+  financePendingReferenceDate: new Date().toISOString().slice(0,10),
+  financePaidReferenceDate: new Date().toISOString().slice(0,10),
+  financePendingChannel: "",
+  financePaidChannel: "",
+  financePendingStart: "",
+  financePendingEnd: "",
+  financePaidStart: "",
+  financePaidEnd: "",
 
   realtime: null
 };
@@ -100,6 +128,22 @@ function dateBR(v) {
   if (!v) return "";
   const [y,m,d] = v.split("-");
   return `${d}/${m}/${y}`;
+}
+function dateTimeBR(v) {
+  if (!v) return "Data de pagamento não informada";
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return "Data de pagamento não informada";
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit", month: "2-digit", year: "numeric",
+    hour: "2-digit", minute: "2-digit"
+  }).format(d);
+}
+
+function dateOnlyFromTimestamp(v) {
+  if (!v) return "";
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return "";
+  return toYMD(d);
 }
 function options(items, selected = "") {
   const current = selected || "";
@@ -146,7 +190,112 @@ function saleBelongsToCategory(sale, category = state.activeSalesTab) {
 
 function saleLineTotal(sale, category = state.activeSalesTab) {
   const config = getSalesTabConfig(category);
-  return Number(sale?.[config.qtyField] || 0) * Number(sale?.[config.priceField] || 0);
+  const mainTotal = Number(sale?.[config.qtyField] || 0) * Number(sale?.[config.priceField] || 0);
+
+  if (!supportsExtraPortion(category)) return mainTotal;
+
+  const extraTotal =
+    Number(sale?.extra_portion_qty || 0) *
+    Number(sale?.extra_portion_price || 0);
+
+  return mainTotal + extraTotal;
+}
+
+function todayISO() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getTodaySales() {
+  const today = todayISO();
+  return state.sales.filter(sale => sale.sale_date === today);
+}
+
+function getSaleProductLines(sale) {
+  return Object.entries(SALES_TABS).flatMap(([key, config]) => {
+    const choice = sale?.[config.flavorField];
+    const quantity = Number(sale?.[config.qtyField] || 0);
+    const unitPrice = Number(sale?.[config.priceField] || 0);
+
+    if (!choice || quantity <= 0) return [];
+
+    const hasExtra =
+      supportsExtraPortion(key) &&
+      Boolean(sale?.extra_portion_flavor) &&
+      Number(sale?.extra_portion_qty || 0) > 0;
+
+    const extraQuantity = hasExtra ? Number(sale.extra_portion_qty || 0) : 0;
+    const extraTotal = hasExtra
+      ? extraQuantity * Number(sale.extra_portion_price || 0)
+      : 0;
+
+    return [{
+      category: key,
+      product: config.singular,
+      choice,
+      quantity,
+      unitPrice,
+      extraFlavor: hasExtra ? sale.extra_portion_flavor : "",
+      extraQuantity,
+      extraTotal,
+      total: (quantity * unitPrice) + extraTotal
+    }];
+  });
+}
+
+function todaySalesSummary() {
+  const sales = getTodaySales();
+  const lines = sales.flatMap(getSaleProductLines);
+  const totalItems = lines.reduce((sum, line) => sum + line.quantity + Number(line.extraQuantity || 0), 0);
+  const revenue = lines.reduce((sum, line) => sum + line.total, 0);
+  const pending = sales
+    .filter(sale => sale.payment_status === "pendente")
+    .flatMap(getSaleProductLines)
+    .reduce((sum, line) => sum + line.total, 0);
+
+  return {
+    orders: sales.length,
+    totalItems,
+    revenue,
+    pending
+  };
+}
+
+function todaySaleRowHTML(sale, line) {
+  const paymentLabel = sale.payment_status === "pago"
+    ? "Pago"
+    : sale.payment_status === "pendente"
+      ? "Pendente"
+      : "Não informado";
+
+  const paymentClass = sale.payment_status === "pago"
+    ? "status-paid"
+    : sale.payment_status === "pendente"
+      ? "status-pending"
+      : "status-neutral";
+
+  return `
+    <tr>
+      <td>${escapeHtml(sale.client || "—")}</td>
+      <td>${escapeHtml(line.product)}</td>
+      <td>
+        <div>${escapeHtml(line.choice)}</div>
+        ${line.extraFlavor ? `
+          <small class="today-extra">
+            + ${escapeHtml(line.extraFlavor)} (${line.extraQuantity})
+          </small>
+        ` : ""}
+      </td>
+      <td class="today-number">${line.quantity}</td>
+      <td>${escapeHtml(sale.channel || "—")}</td>
+      <td class="today-money">${money(line.total)}</td>
+      <td><span class="payment-badge ${paymentClass}">${paymentLabel}</span></td>
+      <td>${escapeHtml(sale.notes || "")}</td>
+    </tr>
+  `;
 }
 
 async function bootstrap() {
@@ -228,6 +377,8 @@ async function logout() {
   state.profile = null;
   state.sales = [];
   state.controlSales = [];
+  state.controlTodaySales = [];
+  state.financeSales = [];
   state.historicalSales = [];
   state.historyMeta = null;
   state.roleIntent = null;
@@ -275,7 +426,11 @@ function getPeriodRange(type = state.controlPeriodType, referenceDate = state.co
   let end;
   let label;
 
-  if (type === "week") {
+  if (type === "day") {
+    start = new Date(ref);
+    end = new Date(ref);
+    label = `Dia ${dateBR(toYMD(ref))}`;
+  } else if (type === "week") {
     const day = ref.getDay();
     const distanceToMonday = day === 0 ? -6 : 1 - day;
 
@@ -321,6 +476,17 @@ function monthLabel(monthKey) {
 async function loadControlData() {
   if (!state.session || state.profile?.role !== "gestao") return;
 
+  const today = todayISO();
+
+  const { data: todayData, error: todayError } = await supabase
+    .from("sales")
+    .select("*")
+    .eq("sale_date", today)
+    .order("created_at", { ascending: false });
+
+  if (todayError) throw todayError;
+  state.controlTodaySales = todayData || [];
+
   const period = getPeriodRange();
 
   const { data: salesData, error: salesError } = await supabase
@@ -358,9 +524,24 @@ async function loadControlData() {
   }
 }
 
+async function loadFinanceData() {
+  if (!state.session || state.profile?.role !== "gestao") return;
+
+  const { data, error } = await supabase
+    .from("sales")
+    .select("*")
+    .order("sale_date", { ascending: false })
+    .order("created_at", { ascending: false });
+
+  if (error) throw error;
+  state.financeSales = data || [];
+}
+
 async function refreshCurrentData() {
   if (state.view === "control" && state.profile?.role === "gestao") {
     await loadControlData();
+  } else if (state.view === "finance" && state.profile?.role === "gestao") {
+    await loadFinanceData();
   } else {
     await loadSales();
   }
@@ -406,8 +587,13 @@ async function saveSale(row) {
     cookie_qty: Number(row.cookie_qty || 0),
     cookie_price: Number(row.cookie_price || 0),
 
+    extra_portion_flavor: row.extra_portion_flavor || null,
+    extra_portion_qty: Number(row.extra_portion_qty || 0),
+    extra_portion_price: Number(row.extra_portion_price || 0),
+
     notes: row.notes || null,
     payment_status: row.payment_status || null,
+    paid_at: row.payment_status === "pago" ? new Date().toISOString() : null,
     created_by: state.session.user.id
   };
 
@@ -416,6 +602,15 @@ async function saveSale(row) {
 }
 
 async function updateSale(id, row) {
+  const previous = state.sales.find(sale => String(sale.id) === String(id));
+  let paidAt = previous?.paid_at || null;
+
+  if (row.payment_status === "pago" && previous?.payment_status !== "pago") {
+    paidAt = new Date().toISOString();
+  } else if (row.payment_status !== "pago") {
+    paidAt = null;
+  }
+
   const payload = {
     sale_date: row.sale_date,
     client: row.client || null,
@@ -437,8 +632,13 @@ async function updateSale(id, row) {
     cookie_qty: Number(row.cookie_qty || 0),
     cookie_price: Number(row.cookie_price || 0),
 
+    extra_portion_flavor: row.extra_portion_flavor || null,
+    extra_portion_qty: Number(row.extra_portion_qty || 0),
+    extra_portion_price: Number(row.extra_portion_price || 0),
+
     notes: row.notes || null,
     payment_status: row.payment_status || null,
+    paid_at: paidAt,
     updated_at: new Date().toISOString()
   };
 
@@ -474,6 +674,9 @@ function getCategoryRowData(tr, category = state.activeSalesTab) {
     cookie_size: null,
     cookie_qty: 0,
     cookie_price: 0,
+    extra_portion_flavor: null,
+    extra_portion_qty: 0,
+    extra_portion_price: 0,
     notes: q("notes"),
     payment_status: q("payment_status")
   };
@@ -482,22 +685,44 @@ function getCategoryRowData(tr, category = state.activeSalesTab) {
   row[config.qtyField] = Number(q("quantity") || 0);
   row[config.priceField] = Number(q("unit_price") || 0);
 
+  if (supportsExtraPortion(category)) {
+    const extraFlavor = q("extra_portion_choice");
+
+    if (extraFlavor) {
+      row.extra_portion_flavor = extraFlavor;
+      row.extra_portion_qty = Number(q("extra_quantity") || 1);
+      row.extra_portion_price = Number(q("extra_unit_price") || 0);
+    }
+  }
+
   return row;
 }
 
 function bindLineTotal(tr) {
   const qty = tr.querySelector('[name="quantity"]');
   const price = tr.querySelector('[name="unit_price"]');
+  const extraChoice = tr.querySelector('[name="extra_portion_choice"]');
+  const extraQty = tr.querySelector('[name="extra_quantity"]');
+  const extraPrice = tr.querySelector('[name="extra_unit_price"]');
   const output = tr.querySelector("[data-line-total]");
 
   if (!qty || !price || !output) return;
 
   const refresh = () => {
-    output.textContent = money(Number(qty.value || 0) * Number(price.value || 0));
+    const mainTotal = Number(qty.value || 0) * Number(price.value || 0);
+    const hasExtra = Boolean(extraChoice?.value);
+    const extraTotal = hasExtra
+      ? Number(extraQty?.value || 0) * Number(extraPrice?.value || 0)
+      : 0;
+
+    output.textContent = money(mainTotal + extraTotal);
   };
 
   qty.addEventListener("input", refresh);
   price.addEventListener("input", refresh);
+  extraChoice?.addEventListener("change", refresh);
+  extraQty?.addEventListener("input", refresh);
+  extraPrice?.addEventListener("input", refresh);
   refresh();
 }
 
@@ -547,7 +772,7 @@ function renderAuth() {
                 <button class="access-card access-card-large management-card" data-role="gestao">
                   <span class="access-icon">▥</span>
                   <strong>Acesso Gestão</strong>
-                  <span>Registro + Controle de vendas.</span>
+                  <span>Registro + Controle + Financeiro.</span>
                   <small>Área restrita à Gestão</small>
                 </button>
               </div>
@@ -651,6 +876,7 @@ function sidebarHTML() {
       <nav class="nav">
         <button data-view="sales" class="${state.view==="sales"?"active":""}">▣ Registro de Vendas</button>
         ${canControl ? `<button data-view="control" class="${state.view==="control"?"active":""}">▥ Controle</button>` : ""}
+        ${canControl ? `<button data-view="finance" class="${state.view==="finance"?"active":""}">◔ Financeiro</button>` : ""}
       </nav>
       <div class="side-bottom">
         <div class="profile-card">
@@ -665,11 +891,15 @@ function sidebarHTML() {
 
 function salesPageHTML() {
   const category = state.activeSalesTab;
-  const config = getSalesTabConfig(category);
-  const filteredSales = state.sales.filter(s => saleBelongsToCategory(s, category));
-  const rows = filteredSales.map(s => saleRowHTML(s, category)).join("");
+  const isTodayView = category === "today";
+  const todaySales = getTodaySales();
+  const todayLines = todaySales.flatMap(sale =>
+    getSaleProductLines(sale).map(line => ({ sale, line }))
+  );
+  const todaySummary = todaySalesSummary();
+  const canSeeFinancialSummary = state.profile?.role === "gestao";
 
-  const tabButtons = Object.entries(SALES_TABS).map(([key, tab]) => {
+  const productTabButtons = Object.entries(SALES_TABS).map(([key, tab]) => {
     const count = state.sales.filter(s => saleBelongsToCategory(s, key)).length;
     return `
       <button
@@ -682,6 +912,101 @@ function salesPageHTML() {
       </button>
     `;
   }).join("");
+
+  const todayTabButton = `
+    <button
+      type="button"
+      class="sales-tab sales-tab-today ${isTodayView ? "active" : ""}"
+      data-sales-tab="today"
+    >
+      <span>Vendas do Dia</span>
+      <small>${todaySales.length}</small>
+    </button>
+  `;
+
+  const tabButtons = todayTabButton + productTabButtons;
+
+  if (isTodayView) {
+    const rows = todayLines.map(({ sale, line }) => todaySaleRowHTML(sale, line)).join("");
+
+    return `
+      <div class="topbar">
+        <div>
+          <h1>Registro de Vendas</h1>
+          <p>Vendas do Dia é atualizada automaticamente a cada novo registro.</p>
+        </div>
+        <div class="sync-pill"><span class="sync-dot"></span> Atualização automática</div>
+      </div>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>Vendas do Dia</h2>
+            <p>${dateBR(todayISO())} · visão automática dos registros salvos hoje.</p>
+          </div>
+        </div>
+
+        <div class="sales-tabs" role="tablist" aria-label="Categorias de produtos">
+          ${tabButtons}
+        </div>
+
+        <div class="today-kpis ${canSeeFinancialSummary ? "" : "today-kpis-sales"}">
+          <div class="today-kpi">
+            <span>Pedidos</span>
+            <strong>${todaySummary.orders}</strong>
+          </div>
+          <div class="today-kpi">
+            <span>Itens vendidos</span>
+            <strong>${todaySummary.totalItems}</strong>
+          </div>
+          ${canSeeFinancialSummary ? `
+            <div class="today-kpi">
+              <span>Faturamento do dia</span>
+              <strong>${money(todaySummary.revenue)}</strong>
+            </div>
+          ` : ""}
+          <div class="today-kpi">
+            <span>Valor pendente</span>
+            <strong>${money(todaySummary.pending)}</strong>
+          </div>
+        </div>
+
+        <div class="table-wrap today-table-wrap">
+          <table class="sales-table today-sales-table">
+            <thead>
+              <tr>
+                <th>CLIENTE</th>
+                <th>PRODUTO</th>
+                <th>SABOR / TAMANHO</th>
+                <th>QTD.</th>
+                <th>CANAL</th>
+                <th>TOTAL</th>
+                <th>PAGAMENTO</th>
+                <th>OBSERVAÇÕES</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows || `
+                <tr>
+                  <td colspan="8" class="empty">Nenhuma venda registrada hoje.</td>
+                </tr>
+              `}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="panel-foot">
+          <span class="muted">Esta aba é somente para acompanhamento.</span>
+          <span class="muted">Registre novas vendas nas abas de produtos.</span>
+        </div>
+      </section>
+    `;
+  }
+
+  const config = getSalesTabConfig(category);
+  const hasExtraColumn = supportsExtraPortion(category);
+  const filteredSales = state.sales.filter(s => saleBelongsToCategory(s, category));
+  const rows = filteredSales.map(s => saleRowHTML(s, category)).join("");
 
   return `
     <div class="topbar">
@@ -714,18 +1039,19 @@ function salesPageHTML() {
       </div>
 
       <div class="table-wrap">
-        <table class="sales-table compact-sales-table">
+        <table class="sales-table compact-sales-table ${hasExtraColumn ? "has-extra-column" : ""}">
           <thead>
             <tr>
               <th>DATA</th>
               <th>CLIENTE</th>
               <th>CANAL DO PEDIDO</th>
               <th>${config.choiceLabel.toUpperCase()}</th>
-              <th>QUANTIDADE</th>
+              <th class="qty-header">QTD.</th>
               <th>PREÇO UNITÁRIO</th>
+              ${hasExtraColumn ? `<th>PORÇÃO EXTRA</th>` : ""}
               <th>TOTAL</th>
-              <th>PAGAMENTO</th>
-              <th>OBSERVAÇÕES</th>
+              <th>PGTO</th>
+              <th>OBS.</th>
               <th>AÇÕES</th>
             </tr>
           </thead>
@@ -771,9 +1097,36 @@ function newRowHTML(category = state.activeSalesTab) {
       <td>
         <input class="price-input" name="unit_price" type="number" min="0" step=".01" placeholder="0,00">
       </td>
+      ${supportsExtraPortion(category) ? `
+        <td class="extra-portion-cell">
+          <select name="extra_portion_choice" aria-label="Sabor da porção extra">
+            ${options(EXTRA_PORTION_FLAVORS)}
+          </select>
+          <div class="extra-portion-meta">
+            <input
+              name="extra_quantity"
+              type="number"
+              min="1"
+              step="1"
+              value="1"
+              aria-label="Quantidade da porção extra"
+              title="Quantidade da porção extra"
+            >
+            <input
+              name="extra_unit_price"
+              type="number"
+              min="0"
+              step=".01"
+              placeholder="R$"
+              aria-label="Preço da porção extra"
+              title="Preço unitário da porção extra"
+            >
+          </div>
+        </td>
+      ` : ""}
       <td class="line-total" data-line-total>${money(0)}</td>
       <td>
-        <select name="payment_status">${paymentStatusOptions("", true)}</select>
+        <select name="payment_status" class="payment-select payment-select-pending">${paymentStatusOptions("", true)}</select>
       </td>
       <td>
         <input class="obs-input" name="notes" placeholder="Observações">
@@ -812,9 +1165,39 @@ function saleRowHTML(s, category = state.activeSalesTab) {
       <td>
         <input class="price-input" name="unit_price" type="number" min="0" step=".01" value="${unitPrice}">
       </td>
-      <td class="line-total" data-line-total>${money(quantity * unitPrice)}</td>
+      ${supportsExtraPortion(category) ? `
+        <td class="extra-portion-cell">
+          <select name="extra_portion_choice" aria-label="Sabor da porção extra">
+            ${options(EXTRA_PORTION_FLAVORS, s.extra_portion_flavor || "")}
+          </select>
+          <div class="extra-portion-meta">
+            <input
+              name="extra_quantity"
+              type="number"
+              min="1"
+              step="1"
+              value="${Number(s.extra_portion_qty || 0) || 1}"
+              aria-label="Quantidade da porção extra"
+              title="Quantidade da porção extra"
+            >
+            <input
+              name="extra_unit_price"
+              type="number"
+              min="0"
+              step=".01"
+              value="${Number(s.extra_portion_price || 0)}"
+              aria-label="Preço da porção extra"
+              title="Preço unitário da porção extra"
+            >
+          </div>
+        </td>
+      ` : ""}
+      <td class="line-total" data-line-total>${money(
+        (quantity * unitPrice) +
+        (Number(s.extra_portion_qty || 0) * Number(s.extra_portion_price || 0))
+      )}</td>
       <td>
-        <select name="payment_status">${paymentStatusOptions(s.payment_status || "", false)}</select>
+        <select name="payment_status" class="payment-select ${s.payment_status === "pago" ? "payment-select-paid" : (s.payment_status === "pendente" ? "payment-select-pending" : "")}">${paymentStatusOptions(s.payment_status || "", false)}</select>
       </td>
       <td>
         <input class="obs-input" name="notes" value="${escapeHtml(s.notes || "")}">
@@ -833,7 +1216,448 @@ function escapeHtml(v) {
   return String(v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
 }
 
-function controlPageHTML() {
+
+
+function financialSaleTotal(sale) {
+  return getSaleProductLines(sale).reduce((sum, line) => sum + Number(line.total || 0), 0);
+}
+
+function financialSaleInfo(sale) {
+  const lines = getSaleProductLines(sale);
+  if (!lines.length) return { product: "—", detail: "—", quantity: 0, total: 0 };
+
+  const product = lines.map(line => line.product).join(" + ");
+  const detail = lines.map(line => {
+    const extra = line.extraFlavor ? ` + ${line.extraFlavor}` : "";
+    return `${line.choice}${extra}`;
+  }).join(" + ");
+  const quantity = lines.reduce((sum, line) => sum + line.quantity + Number(line.extraQuantity || 0), 0);
+  const total = lines.reduce((sum, line) => sum + line.total, 0);
+  return { product, detail, quantity, total };
+}
+
+function financeFilterConfig(view = state.financeView) {
+  if (view === "paid") {
+    return {
+      periodType: state.financePaidPeriodType,
+      referenceDate: state.financePaidReferenceDate,
+      channel: state.financePaidChannel,
+      start: state.financePaidStart,
+      end: state.financePaidEnd
+    };
+  }
+
+  return {
+    periodType: state.financePendingPeriodType,
+    referenceDate: state.financePendingReferenceDate,
+    channel: state.financePendingChannel,
+    start: state.financePendingStart,
+    end: state.financePendingEnd
+  };
+}
+
+function financeRange(config) {
+  const type = config.periodType;
+  const ref = config.referenceDate || todayISO();
+
+  if (type === "all") return null;
+  if (type === "today") return { start: todayISO(), end: todayISO() };
+  if (type === "custom") {
+    if (!config.start || !config.end) return null;
+    return { start: config.start, end: config.end };
+  }
+
+  return getPeriodRange(type, ref);
+}
+
+function getFilteredFinanceSales(view = state.financeView) {
+  const config = financeFilterConfig(view);
+  const range = financeRange(config);
+  const desiredStatus = view === "paid" ? "pago" : "pendente";
+
+  return (state.financeSales || []).filter(sale => {
+    if (sale.payment_status !== desiredStatus) return false;
+    if (config.channel && sale.channel !== config.channel) return false;
+
+    if (!range) return true;
+
+    const dateValue = view === "paid"
+      ? dateOnlyFromTimestamp(sale.paid_at)
+      : sale.sale_date;
+
+    if (!dateValue) return false;
+    return dateValue >= range.start && dateValue <= range.end;
+  });
+}
+
+function financePeriodOptions(selected) {
+  const items = [
+    ["all", "Todos"],
+    ["today", "Hoje"],
+    ["day", "Dia"],
+    ["week", "Semana"],
+    ["fortnight1", "1ª quinzena"],
+    ["fortnight2", "2ª quinzena"],
+    ["month", "Mês"],
+    ["custom", "Período personalizado"]
+  ];
+
+  return items.map(([value, label]) =>
+    `<option value="${value}" ${selected === value ? "selected" : ""}>${label}</option>`
+  ).join("");
+}
+
+function financeChannelOptions(selected = "") {
+  return `<option value="">Todos os canais</option>` + CHANNELS.map(channel =>
+    `<option value="${escapeHtml(channel)}" ${selected === channel ? "selected" : ""}>${escapeHtml(channel)}</option>`
+  ).join("");
+}
+
+function financeFiltersHTML(view) {
+  const config = financeFilterConfig(view);
+  const isCustom = config.periodType === "custom";
+  const referenceDisabled = ["all", "today", "custom"].includes(config.periodType);
+
+  return `
+    <section class="finance-filters">
+      <div class="period-control">
+        <label>Período</label>
+        <select id="financePeriodType">${financePeriodOptions(config.periodType)}</select>
+      </div>
+
+      <div class="period-control ${referenceDisabled ? "finance-reference-disabled" : ""}">
+        <label>Data de referência</label>
+        <input id="financeReferenceDate" type="date" value="${config.referenceDate || todayISO()}" ${referenceDisabled ? "disabled" : ""}>
+      </div>
+
+      <div class="period-control">
+        <label>Canal</label>
+        <select id="financeChannel">${financeChannelOptions(config.channel)}</select>
+      </div>
+
+      <div class="finance-custom-dates ${isCustom ? "" : "hidden"}" id="financeCustomDates">
+        <div class="period-control">
+          <label>De</label>
+          <input id="financeStartDate" type="date" value="${config.start || ""}">
+        </div>
+        <div class="period-control">
+          <label>Até</label>
+          <input id="financeEndDate" type="date" value="${config.end || ""}">
+        </div>
+      </div>
+
+      <div class="period-search-action finance-search-action">
+        <button id="financeSearchBtn" class="btn-primary period-search-btn" type="button">Pesquisar</button>
+      </div>
+    </section>
+  `;
+}
+
+function pendingFinanceHTML() {
+  const sales = getFilteredFinanceSales("pending");
+  const totalPending = sales.reduce((sum, sale) => sum + financialSaleTotal(sale), 0);
+  const uniqueClients = new Set(sales.map(s => (s.client || "").trim()).filter(Boolean)).size;
+  const maxPending = Math.max(0, ...sales.map(financialSaleTotal));
+
+  const rows = sales.map(sale => {
+    const info = financialSaleInfo(sale);
+    return `
+      <tr>
+        <td>${dateBR(sale.sale_date)}</td>
+        <td>${escapeHtml(sale.client || "—")}</td>
+        <td>${escapeHtml(info.product)}</td>
+        <td>${escapeHtml(info.detail)}</td>
+        <td class="finance-money">${money(info.total)}</td>
+        <td>${escapeHtml(sale.channel || "—")}</td>
+        <td><span class="payment-badge status-pending">Pendente</span></td>
+        <td><button class="finance-pay-btn" data-mark-paid="${sale.id}">Marcar como pago</button></td>
+      </tr>
+    `;
+  }).join("");
+
+  return `
+    <section class="finance-kpis">
+      <div class="finance-kpi"><span>Total pendente a receber</span><strong>${money(totalPending)}</strong></div>
+      <div class="finance-kpi"><span>Pedidos pendentes</span><strong>${sales.length}</strong></div>
+      <div class="finance-kpi"><span>Clientes com pendência</span><strong>${uniqueClients}</strong></div>
+      <div class="finance-kpi"><span>Maior pendência</span><strong>${money(maxPending)}</strong></div>
+    </section>
+
+    ${financeFiltersHTML("pending")}
+
+    <section class="card finance-table-card">
+      <div class="control-section-head">
+        <div>
+          <h3>Pagamentos pendentes</h3>
+          <p>Vendas que ainda aguardam pagamento.</p>
+        </div>
+      </div>
+      <div class="table-wrap finance-table-wrap">
+        <table class="sales-table finance-table">
+          <thead>
+            <tr>
+              <th>DATA DA VENDA</th><th>CLIENTE</th><th>PRODUTO</th><th>SABOR / TAMANHO</th>
+              <th>VALOR</th><th>CANAL</th><th>STATUS</th><th>AÇÕES</th>
+            </tr>
+          </thead>
+          <tbody>${rows || `<tr><td colspan="8" class="empty">Nenhum pagamento pendente encontrado.</td></tr>`}</tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function paidFinanceHTML() {
+  const filtered = getFilteredFinanceSales("paid");
+  const paidToday = (state.financeSales || []).filter(sale =>
+    sale.payment_status === "pago" && dateOnlyFromTimestamp(sale.paid_at) === todayISO()
+  );
+  const receivedToday = paidToday.reduce((sum, sale) => sum + financialSaleTotal(sale), 0);
+  const receivedPeriod = filtered.reduce((sum, sale) => sum + financialSaleTotal(sale), 0);
+
+  const rows = filtered.map(sale => {
+    const info = financialSaleInfo(sale);
+    return `
+      <tr>
+        <td>${sale.paid_at ? dateTimeBR(sale.paid_at) : `<span class="finance-no-date">Data de pagamento não informada</span>`}</td>
+        <td>${escapeHtml(sale.client || "—")}</td>
+        <td>${dateBR(sale.sale_date)}</td>
+        <td>${escapeHtml(info.product)}</td>
+        <td>${escapeHtml(info.detail)}</td>
+        <td class="finance-money">${money(info.total)}</td>
+        <td>${escapeHtml(sale.channel || "—")}</td>
+        <td><span class="payment-badge status-paid">Pago</span></td>
+      </tr>
+    `;
+  }).join("");
+
+  return `
+    <section class="finance-kpis finance-kpis-paid">
+      <div class="finance-kpi"><span>Recebido hoje</span><strong>${money(receivedToday)}</strong></div>
+      <div class="finance-kpi"><span>Pagamentos realizados hoje</span><strong>${paidToday.length}</strong></div>
+      <div class="finance-kpi"><span>Total recebido no período</span><strong>${money(receivedPeriod)}</strong></div>
+    </section>
+
+    ${financeFiltersHTML("paid")}
+
+    <section class="card finance-table-card">
+      <div class="control-section-head">
+        <div>
+          <h3>Pagamentos realizados</h3>
+          <p>Organizados pela data em que o pagamento foi registrado.</p>
+        </div>
+      </div>
+      <div class="table-wrap finance-table-wrap">
+        <table class="sales-table finance-table finance-paid-table">
+          <thead>
+            <tr>
+              <th>DATA DO PAGAMENTO</th><th>CLIENTE</th><th>DATA DA VENDA</th><th>PRODUTO</th>
+              <th>SABOR / TAMANHO</th><th>VALOR</th><th>CANAL</th><th>STATUS</th>
+            </tr>
+          </thead>
+          <tbody>${rows || `<tr><td colspan="8" class="empty">Nenhum pagamento encontrado para o período.</td></tr>`}</tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function financePageHTML() {
+  const pendingActive = state.financeView === "pending";
+  return `
+    <div class="topbar finance-topbar">
+      <div>
+        <h1>Financeiro</h1>
+        <p>Acompanhe pagamentos pendentes e valores efetivamente recebidos.</p>
+      </div>
+      <div class="sync-pill"><span class="sync-dot"></span> Conectado às vendas</div>
+    </div>
+
+    <div class="finance-tabs" role="tablist" aria-label="Financeiro">
+      <button type="button" class="finance-tab finance-tab-pending ${pendingActive ? "active" : ""}" data-finance-view="pending">
+        Pendente
+      </button>
+      <button type="button" class="finance-tab finance-tab-paid ${!pendingActive ? "active" : ""}" data-finance-view="paid">
+        Pago
+      </button>
+    </div>
+
+    ${pendingActive ? pendingFinanceHTML() : paidFinanceHTML()}
+  `;
+}
+
+async function markSaleAsPaid(id) {
+  const { error } = await supabase
+    .from("sales")
+    .update({
+      payment_status: "pago",
+      paid_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", id);
+
+  if (error) throw error;
+  await loadFinanceData();
+}
+
+function bindFinancePage() {
+  const root = document.querySelector("#main");
+
+  root.querySelectorAll("[data-finance-view]").forEach(button => {
+    button.addEventListener("click", () => {
+      state.financeView = button.dataset.financeView;
+      renderMainOnly();
+    });
+  });
+
+  root.querySelector("#financePeriodType")?.addEventListener("change", e => {
+    const type = e.target.value;
+    const custom = root.querySelector("#financeCustomDates");
+    const reference = root.querySelector("#financeReferenceDate");
+    custom?.classList.toggle("hidden", type !== "custom");
+    if (reference) reference.disabled = ["all", "today", "custom"].includes(type);
+  });
+
+  root.querySelector("#financeSearchBtn")?.addEventListener("click", () => {
+    const view = state.financeView;
+    const periodType = root.querySelector("#financePeriodType")?.value || "all";
+    const referenceDate = root.querySelector("#financeReferenceDate")?.value || todayISO();
+    const channel = root.querySelector("#financeChannel")?.value || "";
+    const start = root.querySelector("#financeStartDate")?.value || "";
+    const end = root.querySelector("#financeEndDate")?.value || "";
+
+    if (periodType === "custom" && (!start || !end)) {
+      alert("Informe as datas inicial e final do período personalizado.");
+      return;
+    }
+
+    if (periodType === "custom" && start > end) {
+      alert("A data inicial não pode ser posterior à data final.");
+      return;
+    }
+
+    if (view === "paid") {
+      state.financePaidPeriodType = periodType;
+      state.financePaidReferenceDate = referenceDate;
+      state.financePaidChannel = channel;
+      state.financePaidStart = start;
+      state.financePaidEnd = end;
+    } else {
+      state.financePendingPeriodType = periodType;
+      state.financePendingReferenceDate = referenceDate;
+      state.financePendingChannel = channel;
+      state.financePendingStart = start;
+      state.financePendingEnd = end;
+    }
+
+    renderMainOnly();
+  });
+
+  root.querySelectorAll("[data-mark-paid]").forEach(button => {
+    button.addEventListener("click", async () => {
+      const id = button.dataset.markPaid;
+      if (!confirm("Confirmar este pagamento como Pago?")) return;
+
+      button.disabled = true;
+      button.textContent = "Salvando...";
+      try {
+        await markSaleAsPaid(id);
+        renderMainOnly();
+      } catch (error) {
+        console.error(error);
+        button.disabled = false;
+        button.textContent = "Marcar como pago";
+        alert("Não foi possível registrar o pagamento.");
+      }
+    });
+  });
+}
+
+function controlTodaySummary() {
+  const sales = state.controlTodaySales || [];
+  const lines = sales.flatMap(getSaleProductLines);
+  const totalItems = lines.reduce(
+    (sum, line) => sum + line.quantity + Number(line.extraQuantity || 0),
+    0
+  );
+  const revenue = lines.reduce((sum, line) => sum + line.total, 0);
+  const pending = sales
+    .filter(sale => sale.payment_status === "pendente")
+    .flatMap(getSaleProductLines)
+    .reduce((sum, line) => sum + line.total, 0);
+
+  return {
+    orders: sales.length,
+    totalItems,
+    revenue,
+    pending
+  };
+}
+
+function controlTodayHTML() {
+  const summary = controlTodaySummary();
+  const rows = (state.controlTodaySales || [])
+    .flatMap(sale => getSaleProductLines(sale).map(line => todaySaleRowHTML(sale, line)))
+    .join("");
+
+  return `
+    <section class="control-today-view">
+      <div class="today-kpis control-today-kpis">
+        <div class="today-kpi">
+          <span>Pedidos de hoje</span>
+          <strong>${summary.orders}</strong>
+        </div>
+        <div class="today-kpi">
+          <span>Itens vendidos</span>
+          <strong>${summary.totalItems}</strong>
+        </div>
+        <div class="today-kpi">
+          <span>Faturamento do dia</span>
+          <strong>${money(summary.revenue)}</strong>
+        </div>
+        <div class="today-kpi">
+          <span>Valor pendente</span>
+          <strong>${money(summary.pending)}</strong>
+        </div>
+      </div>
+
+      <section class="card control-today-card">
+        <div class="control-section-head">
+          <div>
+            <h3>Vendas do Dia</h3>
+            <p>${dateBR(todayISO())} · atualização automática a partir do Registro de Vendas.</p>
+          </div>
+        </div>
+
+        <div class="table-wrap today-table-wrap">
+          <table class="sales-table today-sales-table">
+            <thead>
+              <tr>
+                <th>CLIENTE</th>
+                <th>PRODUTO</th>
+                <th>SABOR / TAMANHO</th>
+                <th>QTD.</th>
+                <th>CANAL</th>
+                <th>TOTAL</th>
+                <th>PAGAMENTO</th>
+                <th>OBSERVAÇÕES</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows || `
+                <tr>
+                  <td colspan="8" class="empty">Nenhuma venda registrada hoje.</td>
+                </tr>
+              `}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+  `;
+}
+
+function controlAnalysisHTML() {
   const period = getPeriodRange();
   const report = buildReport(state.controlSales, state.historicalSales);
   const max = Math.max(1, ...report.flavorRanking.map(x => x.qty));
@@ -861,7 +1685,7 @@ function controlPageHTML() {
     </tr>
   `).join("");
 
-  const referenceInput = state.controlPeriodType === "week"
+  const referenceInput = ["day", "week"].includes(state.controlPeriodType)
     ? `<input id="periodReference" type="date" value="${state.controlReferenceDate}">`
     : `<input id="periodReference" type="month" value="${state.controlReferenceDate.slice(0,7)}">`;
 
@@ -880,12 +1704,8 @@ function controlPageHTML() {
     : money(report.ticket);
 
   return `
-    <div class="topbar control-topbar">
-      <div>
-        <h1>Controle</h1>
-        <p>Visão gerencial conectada ao Registro de Vendas e ao histórico consolidado.</p>
-      </div>
-
+    <div class="control-analysis-actions">
+      <div></div>
       <div class="export-actions">
         <button id="exportPdfBtn" class="btn-secondary">Gerar PDF</button>
         <button id="exportExcelBtn" class="btn-primary">Gerar Excel</button>
@@ -896,6 +1716,7 @@ function controlPageHTML() {
       <div class="period-control">
         <label>Período</label>
         <select id="periodType">
+          <option value="day" ${state.controlPeriodType==="day"?"selected":""}>Dia</option>
           <option value="week" ${state.controlPeriodType==="week"?"selected":""}>Semana</option>
           <option value="fortnight1" ${state.controlPeriodType==="fortnight1"?"selected":""}>1ª quinzena</option>
           <option value="fortnight2" ${state.controlPeriodType==="fortnight2"?"selected":""}>2ª quinzena</option>
@@ -904,8 +1725,14 @@ function controlPageHTML() {
       </div>
 
       <div class="period-control">
-        <label>${state.controlPeriodType === "week" ? "Data de referência" : "Mês de referência"}</label>
+        <label>${["day", "week"].includes(state.controlPeriodType) ? "Data de referência" : "Mês de referência"}</label>
         ${referenceInput}
+      </div>
+
+      <div class="period-search-action">
+        <button id="searchPeriodBtn" class="btn-primary period-search-btn" type="button">
+          Pesquisar
+        </button>
       </div>
 
       <div class="period-result">
@@ -975,13 +1802,50 @@ function controlPageHTML() {
   `;
 }
 
+
+function controlPageHTML() {
+  const isToday = state.controlView === "today";
+
+  return `
+    <div class="topbar control-topbar">
+      <div>
+        <h1>Controle</h1>
+        <p>${isToday
+          ? "Acompanhamento operacional das vendas registradas hoje."
+          : "Visão gerencial conectada ao Registro de Vendas e ao histórico consolidado."
+        }</p>
+      </div>
+    </div>
+
+    <div class="control-view-tabs" role="tablist" aria-label="Visualizações do controle">
+      <button
+        type="button"
+        class="control-view-tab ${isToday ? "active" : ""}"
+        data-control-view="today"
+      >
+        Vendas do Dia
+      </button>
+      <button
+        type="button"
+        class="control-view-tab ${!isToday ? "active" : ""}"
+        data-control-view="analysis"
+      >
+        Análise por Período
+      </button>
+    </div>
+
+    ${isToday ? controlTodayHTML() : controlAnalysisHTML()}
+  `;
+}
+
+
 function buildHistoricalNotice(report) {
   if (state.controlPeriodType !== "month") {
     return `
       <div class="history-note">
         <strong>Filtro detalhado:</strong>
-        semana e quinzena utilizam apenas vendas com data registrada no sistema.
-        O histórico de janeiro a julho foi recebido consolidado por mês e não pode ser dividido com precisão por semana ou quinzena.
+        dia, semana e quinzena utilizam apenas vendas com data registrada no sistema.
+        O histórico de janeiro a julho foi recebido consolidado por mês e não pode ser dividido com precisão por dia, semana ou quinzena.
       </div>
     `;
   }
@@ -1027,7 +1891,8 @@ function buildReport(rows, historicalRows = []) {
     "Bolo inteiro": { qty:0, revenue:0 },
     "Bolo no pote": { qty:0, revenue:0 },
     "Fatia": { qty:0, revenue:0 },
-    "Cookies": { qty:0, revenue:0 }
+    "Cookies": { qty:0, revenue:0 },
+    "Porção extra": { qty:0, revenue:0 }
   };
 
   rows.forEach(r => {
@@ -1073,6 +1938,14 @@ function buildReport(rows, historicalRows = []) {
       r.cookie_qty,
       r.cookie_price,
       r.cookie_size ? `Cookie ${r.cookie_size}` : ""
+    );
+
+    addDaily(
+      "Porção extra",
+      r.extra_portion_flavor,
+      r.extra_portion_qty,
+      r.extra_portion_price,
+      r.extra_portion_flavor ? `Porção extra - ${r.extra_portion_flavor}` : ""
     );
 
     if (r.channel) {
@@ -1187,6 +2060,7 @@ async function exportControlExcel() {
         "Bolo no pote","Qtd. pote","Preço unitário pote","Total pote",
         "Fatia","Qtd. fatia","Preço unitário fatia","Total fatia",
         "Cookie","Qtd. cookie","Preço unitário cookie","Total cookie",
+        "Porção extra","Qtd. porção extra","Preço unitário porção extra","Total porção extra",
         "Pagamento","Observações"
       ],
       ...state.controlSales.map(r => [
@@ -1213,6 +2087,11 @@ async function exportControlExcel() {
         Number(r.cookie_qty || 0),
         Number(r.cookie_price || 0),
         Number(r.cookie_qty || 0) * Number(r.cookie_price || 0),
+
+        r.extra_portion_flavor || "",
+        Number(r.extra_portion_qty || 0),
+        Number(r.extra_portion_price || 0),
+        Number(r.extra_portion_qty || 0) * Number(r.extra_portion_price || 0),
 
         r.payment_status === "pago" ? "Pago" : (r.payment_status === "pendente" ? "Pendente" : "Não informado"),
         r.notes || ""
@@ -1328,8 +2207,18 @@ function bindSalesPage() {
   });
 
   root.querySelectorAll("[data-sales-tab]").forEach(button => {
-    button.addEventListener("click", () => {
-      state.activeSalesTab = button.dataset.salesTab;
+    button.addEventListener("click", async () => {
+      const nextTab = button.dataset.salesTab;
+      state.activeSalesTab = nextTab;
+
+      if (nextTab === "today") {
+        const currentMonth = todayISO().slice(0, 7);
+        if (state.month !== currentMonth) {
+          state.month = currentMonth;
+          await loadSales();
+        }
+      }
+
       renderMainOnly();
     });
   });
@@ -1339,6 +2228,14 @@ function bindSalesPage() {
   });
 
   root.querySelectorAll("#salesBody tr").forEach(bindLineTotal);
+  root.querySelectorAll('select[name="payment_status"]').forEach(select => {
+    const refreshPaymentColor = () => {
+      select.classList.toggle("payment-select-pending", select.value === "pendente");
+      select.classList.toggle("payment-select-paid", select.value === "pago");
+    };
+    select.addEventListener("change", refreshPaymentColor);
+    refreshPaymentColor();
+  });
 
   root.querySelector(".save-new")?.addEventListener("click", async e => {
     const tr = e.target.closest("tr");
@@ -1411,6 +2308,44 @@ function bindSalesPage() {
 function bindControlPage() {
   const root = document.querySelector("#main");
 
+  root.querySelectorAll("[data-control-view]").forEach(button => {
+    button.addEventListener("click", () => {
+      state.controlView = button.dataset.controlView;
+      renderMainOnly();
+    });
+  });
+
+  root.querySelector("#searchPeriodBtn")?.addEventListener("click", async () => {
+    const periodType = root.querySelector("#periodType")?.value || state.controlPeriodType;
+    const referenceValue = root.querySelector("#periodReference")?.value;
+
+    state.controlPeriodType = periodType;
+
+    if (referenceValue) {
+      state.controlReferenceDate = ["day", "week"].includes(periodType)
+        ? referenceValue
+        : `${referenceValue}-01`;
+    }
+
+    const button = root.querySelector("#searchPeriodBtn");
+    if (button) {
+      button.disabled = true;
+      button.textContent = "Pesquisando...";
+    }
+
+    try {
+      await loadControlData();
+      renderMainOnly();
+    } catch (error) {
+      console.error(error);
+      if (button) {
+        button.disabled = false;
+        button.textContent = "Pesquisar";
+      }
+      alert("Não foi possível carregar a pesquisa. Tente novamente.");
+    }
+  });
+
   root.querySelector("#periodType")?.addEventListener("change", async e => {
     state.controlPeriodType = e.target.value;
     await loadControlData();
@@ -1418,7 +2353,7 @@ function bindControlPage() {
   });
 
   root.querySelector("#periodReference")?.addEventListener("change", async e => {
-    if (state.controlPeriodType === "week") {
+    if (["day", "week"].includes(state.controlPeriodType)) {
       state.controlReferenceDate = e.target.value;
     } else {
       state.controlReferenceDate = `${e.target.value}-01`;
@@ -1435,8 +2370,17 @@ function bindControlPage() {
 function renderMainOnly() {
   const main = document.querySelector("#main");
   if (!main) return render();
-  main.innerHTML = state.view === "control" ? controlPageHTML() : salesPageHTML();
-  state.view === "control" ? bindControlPage() : bindSalesPage();
+
+  if (state.view === "control") {
+    main.innerHTML = controlPageHTML();
+    bindControlPage();
+  } else if (state.view === "finance") {
+    main.innerHTML = financePageHTML();
+    bindFinancePage();
+  } else {
+    main.innerHTML = salesPageHTML();
+    bindSalesPage();
+  }
 }
 
 function renderApp() {
@@ -1454,6 +2398,8 @@ function renderApp() {
 
     if (state.view === "control") {
       await loadControlData();
+    } else if (state.view === "finance") {
+      await loadFinanceData();
     } else {
       await loadSales();
     }

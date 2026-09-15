@@ -703,10 +703,10 @@ button { cursor: pointer; }
 }
 
 
-/* ===== REGISTRO EM 4 ABAS ===== */
+/* ===== REGISTRO: VENDAS DO DIA + 5 ABAS DE PRODUTOS ===== */
 .sales-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
   padding: 16px 22px 0;
   background: #fffaf6;
@@ -805,4 +805,630 @@ button { cursor: pointer; }
     width: 100%;
     margin-left: 0;
   }
+}
+
+
+/* =========================================================
+   AJUSTE PONTUAL — TABELA DE REGISTRO MAIS COMPACTA
+   Somente layout. Nenhuma regra de negócio foi alterada.
+   ========================================================= */
+
+@media (min-width: 1051px) {
+  /* A tabela passa a ocupar exatamente a largura disponível. */
+  .compact-sales-table {
+    width: 100%;
+    min-width: 0;
+    table-layout: fixed;
+  }
+
+  /* Distribuição das 10 colunas para caber de Data até Ações. */
+  .compact-sales-table th:nth-child(1),
+  .compact-sales-table td:nth-child(1) { width: 11%; } /* Data */
+
+  .compact-sales-table th:nth-child(2),
+  .compact-sales-table td:nth-child(2) { width: 13%; } /* Cliente */
+
+  .compact-sales-table th:nth-child(3),
+  .compact-sales-table td:nth-child(3) { width: 11%; } /* Canal */
+
+  .compact-sales-table th:nth-child(4),
+  .compact-sales-table td:nth-child(4) { width: 15%; } /* Sabor/Tamanho */
+
+  .compact-sales-table th:nth-child(5),
+  .compact-sales-table td:nth-child(5) { width: 7%; } /* Quantidade */
+
+  .compact-sales-table th:nth-child(6),
+  .compact-sales-table td:nth-child(6) { width: 9%; } /* Preço unitário */
+
+  .compact-sales-table th:nth-child(7),
+  .compact-sales-table td:nth-child(7) { width: 8%; } /* Total */
+
+  .compact-sales-table th:nth-child(8),
+  .compact-sales-table td:nth-child(8) { width: 10%; } /* Pagamento */
+
+  .compact-sales-table th:nth-child(9),
+  .compact-sales-table td:nth-child(9) { width: 10%; } /* Observações */
+
+  .compact-sales-table th:nth-child(10),
+  .compact-sales-table td:nth-child(10) { width: 6%; } /* Ações */
+
+  /* Cabeçalho mais enxuto. */
+  .compact-sales-table th {
+    padding: 9px 5px;
+    font-size: 11.5px;
+    line-height: 1.18;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  /* Linhas mais compactas. */
+  .compact-sales-table td {
+    padding: 5px 4px;
+  }
+
+  /* Remove larguras mínimas antigas que forçavam rolagem horizontal. */
+  .compact-sales-table input,
+  .compact-sales-table select,
+  .compact-sales-table input[type="date"],
+  .compact-sales-table .client-input,
+  .compact-sales-table .qty-input,
+  .compact-sales-table .price-input,
+  .compact-sales-table .obs-input,
+  .compact-sales-table select[name="product_choice"],
+  .compact-sales-table select[name="channel"] {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .compact-sales-table input,
+  .compact-sales-table select {
+    padding: 7px 6px;
+    font-size: 14px;
+    border-radius: 8px;
+  }
+
+  .compact-sales-table input[type="date"] {
+    padding-left: 6px;
+    padding-right: 4px;
+  }
+
+  .compact-sales-table .qty-input {
+    text-align: center;
+  }
+
+  .compact-sales-table .line-total {
+    min-width: 0;
+    font-size: 14px;
+    white-space: nowrap;
+  }
+
+  /* Ações ficam estreitas sem perder Salvar/Excluir. */
+  .compact-sales-table .row-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    width: 100%;
+  }
+
+  .compact-sales-table .icon-btn {
+    width: 100%;
+    padding: 5px 4px;
+    font-size: 11.5px;
+    line-height: 1.18;
+    white-space: nowrap;
+  }
+
+  /* A área da tabela não precisa mais rolar no desktop. */
+  .table-wrap {
+    overflow-x: visible;
+  }
+}
+
+/* Em telas menores, preserva a rolagem como fallback para não quebrar a usabilidade. */
+@media (max-width: 1050px) {
+  .table-wrap {
+    overflow-x: auto;
+  }
+
+  .compact-sales-table {
+    min-width: 1080px;
+  }
+}
+
+
+/* ===== VENDAS DO DIA ===== */
+.sales-tab-today {
+  border-color: rgba(74, 31, 24, .28);
+}
+
+.today-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 14px 22px;
+  background: #fffaf6;
+  border-bottom: 1px solid var(--line);
+}
+
+.today-kpi {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+.today-kpi span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.today-kpi strong {
+  color: var(--coffee);
+  font-size: 19px;
+}
+
+.today-sales-table {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.today-sales-table th,
+.today-sales-table td {
+  padding: 8px 7px;
+  font-size: 12px;
+}
+
+.today-sales-table th:nth-child(1),
+.today-sales-table td:nth-child(1) { width: 16%; }
+
+.today-sales-table th:nth-child(2),
+.today-sales-table td:nth-child(2) { width: 12%; }
+
+.today-sales-table th:nth-child(3),
+.today-sales-table td:nth-child(3) { width: 18%; }
+
+.today-sales-table th:nth-child(4),
+.today-sales-table td:nth-child(4) { width: 7%; }
+
+.today-sales-table th:nth-child(5),
+.today-sales-table td:nth-child(5) { width: 11%; }
+
+.today-sales-table th:nth-child(6),
+.today-sales-table td:nth-child(6) { width: 11%; }
+
+.today-sales-table th:nth-child(7),
+.today-sales-table td:nth-child(7) { width: 12%; }
+
+.today-sales-table th:nth-child(8),
+.today-sales-table td:nth-child(8) { width: 13%; }
+
+.today-number,
+.today-money {
+  font-weight: 700;
+  color: var(--coffee);
+}
+
+.payment-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.status-paid {
+  background: #e7f7ed;
+  color: #187a43;
+  border: 1px solid #bfe7cd;
+}
+
+.status-pending {
+  background: #ffe9e7;
+  color: #b42318;
+  border: 1px solid #f3b7b2;
+}
+
+.status-neutral {
+  background: #f2ece7;
+  color: var(--muted);
+}
+
+@media (max-width: 1180px) {
+  .sales-tabs {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 800px) {
+  .today-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .today-table-wrap {
+    overflow-x: auto;
+  }
+
+  .today-sales-table {
+    min-width: 860px;
+  }
+}
+
+@media (max-width: 560px) {
+  .sales-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .today-kpis {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+/* ===== PORÇÃO EXTRA DENTRO DE BOLOS E FATIAS ===== */
+.extra-portion-cell {
+  vertical-align: middle;
+}
+
+.extra-portion-cell > select {
+  margin-bottom: 4px;
+}
+
+.extra-portion-meta {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 4px;
+}
+
+.extra-portion-meta input {
+  min-width: 0 !important;
+  width: 100%;
+  padding-left: 5px !important;
+  padding-right: 5px !important;
+}
+
+/* Bolos/Fatias possuem uma coluna adicional sem voltar à rolagem no desktop. */
+@media (min-width: 1051px) {
+  .compact-sales-table.has-extra-column th:nth-child(1),
+  .compact-sales-table.has-extra-column td:nth-child(1) { width: 9%; }
+
+  .compact-sales-table.has-extra-column th:nth-child(2),
+  .compact-sales-table.has-extra-column td:nth-child(2) { width: 11%; }
+
+  .compact-sales-table.has-extra-column th:nth-child(3),
+  .compact-sales-table.has-extra-column td:nth-child(3) { width: 8%; }
+
+  .compact-sales-table.has-extra-column th:nth-child(4),
+  .compact-sales-table.has-extra-column td:nth-child(4) { width: 12%; }
+
+  .compact-sales-table.has-extra-column th:nth-child(5),
+  .compact-sales-table.has-extra-column td:nth-child(5) { width: 6%; }
+
+  .compact-sales-table.has-extra-column th:nth-child(6),
+  .compact-sales-table.has-extra-column td:nth-child(6) { width: 8%; }
+
+  .compact-sales-table.has-extra-column th:nth-child(7),
+  .compact-sales-table.has-extra-column td:nth-child(7) { width: 17%; }
+
+  .compact-sales-table.has-extra-column th:nth-child(8),
+  .compact-sales-table.has-extra-column td:nth-child(8) { width: 7%; }
+
+  .compact-sales-table.has-extra-column th:nth-child(9),
+  .compact-sales-table.has-extra-column td:nth-child(9) { width: 9%; }
+
+  .compact-sales-table.has-extra-column th:nth-child(10),
+  .compact-sales-table.has-extra-column td:nth-child(10) { width: 8%; }
+
+  .compact-sales-table.has-extra-column th:nth-child(11),
+  .compact-sales-table.has-extra-column td:nth-child(11) { width: 5%; }
+
+  .compact-sales-table.has-extra-column th {
+    padding-left: 4px;
+    padding-right: 4px;
+  }
+
+  .compact-sales-table.has-extra-column input,
+  .compact-sales-table.has-extra-column select {
+    font-size: 13.5px;
+  }
+}
+
+.today-extra {
+  display: block;
+  margin-top: 3px;
+  color: var(--coffee-3);
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+
+/* ===== CONTROLE: VENDAS DO DIA + ANÁLISE POR PERÍODO ===== */
+.control-view-tabs {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  margin: 0 0 14px;
+  background: #f3e7dd;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.control-view-tab {
+  border: 0;
+  background: transparent;
+  color: var(--coffee-2);
+  border-radius: 9px;
+  padding: 10px 16px;
+  font-weight: 800;
+}
+
+.control-view-tab.active {
+  background: white;
+  color: var(--coffee);
+  box-shadow: 0 4px 12px rgba(74,31,24,.08);
+}
+
+.control-today-view {
+  display: grid;
+  gap: 14px;
+}
+
+.control-today-kpis {
+  padding: 0;
+  background: transparent;
+  border-bottom: 0;
+}
+
+.control-today-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.control-section-head {
+  padding: 18px 20px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.control-section-head h3 {
+  margin: 0 0 4px;
+}
+
+.control-section-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.control-analysis-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+@media (max-width: 650px) {
+  .control-view-tabs {
+    width: 100%;
+  }
+
+  .control-view-tab {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+}
+
+
+/* ===== AJUSTE PONTUAL — QTD. CENTRALIZADA ===== */
+.compact-sales-table .qty-header,
+.compact-sales-table td:nth-child(5) {
+  text-align: center;
+}
+
+.compact-sales-table .qty-input {
+  text-align: center;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+
+/* ===== CONTROLE — BOTÃO PESQUISAR ===== */
+.period-search-action {
+  display: flex;
+  align-items: flex-end;
+}
+
+.period-search-btn {
+  min-height: 48px;
+  padding-left: 22px;
+  padding-right: 22px;
+  white-space: nowrap;
+}
+
+.period-search-btn:disabled {
+  opacity: .65;
+  cursor: wait;
+}
+
+@media (max-width: 760px) {
+  .period-search-action,
+  .period-search-btn {
+    width: 100%;
+  }
+}
+
+
+/* ===== AJUSTES DE PAGAMENTO NO REGISTRO ===== */
+.payment-select-pending {
+  color: #a8241a !important;
+  background: #fff2f1 !important;
+  border-color: #efb8b3 !important;
+  font-weight: 700;
+}
+
+.payment-select-paid {
+  color: #187a43 !important;
+  background: #effaf3 !important;
+  border-color: #bfe7cd !important;
+  font-weight: 700;
+}
+
+.today-kpis-sales {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+/* ===== FINANCEIRO ===== */
+.finance-tabs {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(150px, 1fr));
+  gap: 6px;
+  padding: 5px;
+  margin: 0 0 16px;
+  background: #f4e9df;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.finance-tab {
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 11px 22px;
+  background: transparent;
+  font-weight: 800;
+  color: var(--coffee);
+}
+
+.finance-tab-pending.active {
+  background: #b42318;
+  border-color: #b42318;
+  color: white;
+}
+
+.finance-tab-paid.active {
+  background: #23834e;
+  border-color: #23834e;
+  color: white;
+}
+
+.finance-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.finance-kpis-paid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.finance-kpi {
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 15px 16px;
+}
+
+.finance-kpi span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 5px;
+}
+
+.finance-kpi strong {
+  color: var(--coffee);
+  font-size: 22px;
+}
+
+.finance-filters {
+  display: grid;
+  grid-template-columns: minmax(150px, .8fr) minmax(160px, .9fr) minmax(150px, .8fr) auto auto;
+  gap: 12px;
+  align-items: end;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+
+.finance-custom-dates {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.finance-reference-disabled {
+  opacity: .55;
+}
+
+.finance-table-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.finance-table {
+  width: 100%;
+  table-layout: fixed;
+  min-width: 980px;
+}
+
+.finance-table th,
+.finance-table td {
+  padding: 9px 8px;
+  font-size: 12px;
+  vertical-align: middle;
+}
+
+.finance-money {
+  font-weight: 800;
+  color: var(--coffee);
+  white-space: nowrap;
+}
+
+.finance-pay-btn {
+  border: 1px solid #efb8b3;
+  background: #fff8f7;
+  color: #a8241a;
+  border-radius: 9px;
+  padding: 8px 10px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.finance-pay-btn:hover {
+  background: #ffe9e7;
+}
+
+.finance-pay-btn:disabled {
+  opacity: .6;
+  cursor: wait;
+}
+
+.finance-no-date {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: italic;
+}
+
+@media (max-width: 1100px) {
+  .finance-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .finance-kpis-paid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .finance-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .finance-search-action { width: 100%; }
+  .finance-search-action .btn-primary { width: 100%; }
+}
+
+@media (max-width: 650px) {
+  .finance-tabs { width: 100%; grid-template-columns: 1fr 1fr; }
+  .finance-kpis, .finance-kpis-paid { grid-template-columns: 1fr; }
+  .finance-filters { grid-template-columns: 1fr; }
+  .finance-custom-dates { grid-template-columns: 1fr; }
+  .today-kpis-sales { grid-template-columns: 1fr; }
 }
