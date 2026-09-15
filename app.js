@@ -537,11 +537,27 @@ async function loadFinanceData() {
   state.financeSales = data || [];
 }
 
+async function loadSalesPendingData() {
+  if (!state.session || state.profile?.role !== "vendas") return;
+
+  const { data, error } = await supabase
+    .from("sales")
+    .select("*")
+    .eq("payment_status", "pendente")
+    .order("sale_date", { ascending: false })
+    .order("created_at", { ascending: false });
+
+  if (error) throw error;
+  state.financeSales = data || [];
+}
+
 async function refreshCurrentData() {
   if (state.view === "control" && state.profile?.role === "gestao") {
     await loadControlData();
   } else if (state.view === "finance" && state.profile?.role === "gestao") {
     await loadFinanceData();
+  } else if (state.view === "pending" && state.profile?.role === "vendas") {
+    await loadSalesPendingData();
   } else {
     await loadSales();
   }
@@ -875,7 +891,10 @@ function sidebarHTML() {
       </div>
       <nav class="nav">
         <button data-view="sales" class="${state.view==="sales"?"active":""}">▣ Registro de Vendas</button>
-        ${canControl ? `<button data-view="control" class="${state.view==="control"?"active":""}">▥ Controle</button>` : ""}
+        ${canControl
+          ? `<button data-view="control" class="${state.view==="control"?"active":""}">▥ Controle</button>`
+          : `<button data-view="pending" class="${state.view==="pending"?"active":""}">◔ Pendências</button>`
+        }
         ${canControl ? `<button data-view="finance" class="${state.view==="finance"?"active":""}">◔ Financeiro</button>` : ""}
       </nav>
       <div class="side-bottom">
@@ -1405,6 +1424,121 @@ function pendingFinanceHTML() {
       </div>
     </section>
   `;
+}
+
+
+function salesPendingPageHTML() {
+  const pendingSales = (state.financeSales || [])
+    .filter(sale => sale.payment_status === "pendente");
+
+  const totalPending = pendingSales.reduce(
+    (sum, sale) => sum + financialSaleTotal(sale),
+    0
+  );
+
+  const rows = pendingSales.map(sale => {
+    const info = financialSaleInfo(sale);
+
+    return `
+      <tr>
+        <td>${dateBR(sale.sale_date)}</td>
+        <td>${escapeHtml(sale.client || "—")}</td>
+        <td>${escapeHtml(info.product)}</td>
+        <td>${escapeHtml(info.detail)}</td>
+        <td class="finance-money">${money(info.total)}</td>
+        <td><span class="payment-badge status-pending">Pendente</span></td>
+        <td>
+          <button class="finance-pay-btn sales-pending-pay-btn" data-sales-mark-paid="${sale.id}">
+            Marcar como pago
+          </button>
+        </td>
+      </tr>
+    `;
+  }).join("");
+
+  return `
+    <div class="topbar sales-pending-topbar">
+      <div>
+        <h1>Pendências</h1>
+        <p>Consulte os pedidos pendentes e atualize o pagamento quando receber.</p>
+      </div>
+      <div class="sync-pill"><span class="sync-dot"></span> Atualização automática</div>
+    </div>
+
+    <section class="sales-pending-summary">
+      <div class="sales-pending-kpi">
+        <span>Pedidos pendentes</span>
+        <strong>${pendingSales.length}</strong>
+      </div>
+      <div class="sales-pending-kpi">
+        <span>Valor pendente</span>
+        <strong>${money(totalPending)}</strong>
+      </div>
+    </section>
+
+    <section class="card finance-table-card sales-pending-card">
+      <div class="control-section-head">
+        <div>
+          <h3>Pagamentos pendentes</h3>
+          <p>Ao receber, clique em “Marcar como pago”.</p>
+        </div>
+      </div>
+
+      <div class="table-wrap finance-table-wrap">
+        <table class="sales-table finance-table sales-pending-table">
+          <thead>
+            <tr>
+              <th>DATA</th>
+              <th>CLIENTE</th>
+              <th>PRODUTO</th>
+              <th>SABOR / TAMANHO</th>
+              <th>VALOR</th>
+              <th>STATUS</th>
+              <th>AÇÃO</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows || `<tr><td colspan="7" class="empty">Nenhum pagamento pendente.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+function bindSalesPendingPage() {
+  const root = document.querySelector("#main");
+
+  root.querySelectorAll("[data-sales-mark-paid]").forEach(button => {
+    button.addEventListener("click", async () => {
+      const id = button.dataset.salesMarkPaid;
+      if (!confirm("Confirmar este pagamento como Pago?")) return;
+
+      button.disabled = true;
+      button.textContent = "Salvando...";
+
+      try {
+        const { error } = await supabase
+          .from("sales")
+          .update({
+            payment_status: "pago",
+            paid_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", id);
+
+        if (error) throw error;
+
+        await loadSalesPendingData();
+        renderMainOnly();
+      } catch (error) {
+        console.error(error);
+        button.disabled = false;
+        button.textContent = "Marcar como pago";
+        alert("Não foi possível atualizar o pagamento.");
+      }
+    });
+  });
 }
 
 function paidFinanceHTML() {
@@ -2377,6 +2511,9 @@ function renderMainOnly() {
   } else if (state.view === "finance") {
     main.innerHTML = financePageHTML();
     bindFinancePage();
+  } else if (state.view === "pending" && state.profile?.role === "vendas") {
+    main.innerHTML = salesPendingPageHTML();
+    bindSalesPendingPage();
   } else {
     main.innerHTML = salesPageHTML();
     bindSalesPage();
@@ -2400,6 +2537,8 @@ function renderApp() {
       await loadControlData();
     } else if (state.view === "finance") {
       await loadFinanceData();
+    } else if (state.view === "pending" && state.profile?.role === "vendas") {
+      await loadSalesPendingData();
     } else {
       await loadSales();
     }
